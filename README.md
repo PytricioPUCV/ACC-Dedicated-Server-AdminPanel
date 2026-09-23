@@ -6,113 +6,113 @@
 [![ACC Compatible](https://img.shields.io/badge/ACC%20Dedicated%20Server-Steam-red.svg)](https://store.steampowered.com/app/805550/Assetto_Corsa_Competizione/)
 [![Release](https://img.shields.io/badge/Release-v1.0-brightgreen.svg)](https://github.com/)
 
-Suite integral de administración web, telemetría en tiempo real y **orquestador inteligente de rotación automática de circuitos** para el servidor dedicado oficial (`accServer.exe`) de **Assetto Corsa Competizione**.
+Comprehensive web administration suite, real-time telemetry, and **smart automatic track rotation orchestrator** for the official **Assetto Corsa Competizione** dedicated server (`accServer.exe`).
 
-Disponible tanto como **código fuente** en Python como en un **ejecutable standalone `.exe` (Release 1.0)** listo para usar con doble clic, sin necesidad de instalar Python ni librerías externas.
-
----
-
-## ⚡ Planteamiento del Problema y Solución
-
-El binario oficial de Kunos Simulazioni (`accServer.exe`) posee una limitación estructural: **carece de rotación dinámica de pistas en caliente**. Al concluir una carrera, el servidor reinicia indefinidamente el mismo circuito fijado en `cfg/event.json`.
-
-Este orquestador actúa como un **wrapper desacoplado e inteligente** que:
-1. Intercepta asíncronamente el término de carrera en tiempo real mediante la detección de volcados de resultados (`dumpLeaderboards` con sufijo `_R.json`).
-2. Concede una pausa calibrada de **12 segundos** para visualización de podios a los pilotos.
-3. Termina de forma limpia y forzada el proceso con liberación garantizada de sockets y puertos de red (UDP 9231 / TCP 9232).
-4. Aplica la siguiente plantilla del repositorio de circuitos (`tracks_pool/`) en `cfg/event.json`.
-5. Relanza el servidor automáticamente, logrando una rotación continua sin intervención humana.
+Available both as Python **source code** and as a ready-to-use **standalone `.exe` executable (Release 1.0)** that requires just a double-click, with no need to install Python or external libraries.
 
 ---
 
-## ✨ Características Principales
+## ⚡ Problem Statement and Solution
 
-* 🔄 **Rotación Dinámica de Circuitos:** Catálogo calibrado con los **25 circuitos oficiales** de ACC agrupados en sus DLCs.
-* 🌐 **Panel de Control Web Moderno:** Interfaz responsiva con estética *Motorsport Dark Glassmorphism* accesible localmente o en LAN (`http://127.0.0.1:8080`).
-* 📦 **Ejecutable Standalone (.exe):** Cero dependencias externas. El `.exe` incluye internamente la interfaz web y auto-inicializa las 25 pistas en servidores limpios.
-* ⏱️ **Telemetría e Historial de Carreras:** Cálculo de récords de vuelta por circuito, estadísticas de victorias y podios históricos calculados desde los volcados de carrera.
-* 📜 **Visor de Consola en Tiempo Real:** Monitor de conexiones, pings de pilotos y eventos de sala directo en la interfaz web.
-* 🛡️ **Moderación y Lista de Pilotos:** Lista en vivo de pilotos conectados, asignación de administradores permanentes (`cfg/entrylist.json`) y sistema de baneo (`cfg/banlist.json`).
-* ⚙️ **Editor de Configuración Seguro:** Permite editar parámetros de sala, contraseñas y asistencias garantizando la codificación estricta **UTF-16 LE con BOM** requerida por el motor de ACC.
-* 🔐 **Seguridad Integrada:** Generación automática de tokens criptográficos de sesión en `panel_auth.json` y prevención contra vulnerabilidades de path traversal.
+The official Kunos Simulazioni binary (`accServer.exe`) has a structural limitation: **it lacks dynamic hot track rotation**. When a race concludes, the server indefinitely restarts the same circuit set in `cfg/event.json`.
+
+This orchestrator acts as a **decoupled and smart wrapper** that:
+1. Asynchronously intercepts the end of the race in real-time by detecting result dumps (`dumpLeaderboards` with the `_R.json` suffix).
+2. Grants a calibrated **12-second** pause for drivers to view the podium.
+3. Cleanly and forcefully terminates the process, guaranteeing the release of network sockets and ports (UDP 9231 / TCP 9232).
+4. Applies the next template from the track repository (`tracks_pool/`) to `cfg/event.json`.
+5. Automatically relaunches the server, achieving continuous rotation without human intervention.
 
 ---
 
-## 🚀 Guía de Uso Rápido (Para Administradores / Usuarios Finales)
+## ✨ Main Features
 
-No necesitas instalar Python ni compilar nada.
+* 🔄 **Dynamic Track Rotation:** Calibrated catalog featuring all **25 official ACC circuits** grouped by their DLCs.
+* 🌐 **Modern Web Control Panel:** Responsive interface with a *Motorsport Dark Glassmorphism* aesthetic, accessible locally or over LAN (`http://127.0.0.1:8080`).
+* 📦 **Standalone Executable (.exe):** Zero external dependencies. The `.exe` internally bundles the web interface and auto-initializes the 25 tracks on clean servers.
+* ⏱️ **Telemetry and Race History:** Calculation of lap records per circuit, win statistics, and historical podiums computed from race dumps.
+* 📜 **Real-Time Console Viewer:** Monitor connections, driver pings, and lobby events directly in the web interface.
+* 🛡️ **Moderation and Driver List:** Live list of connected drivers, permanent administrator assignment (`cfg/entrylist.json`), and ban system (`cfg/banlist.json`).
+* ⚙️ **Secure Configuration Editor:** Allows editing lobby parameters, passwords, and assists, ensuring the strict **UTF-16 LE with BOM** encoding required by the ACC engine.
+* 🔐 **Integrated Security:** Automatic generation of cryptographic session tokens in `panel_auth.json` and prevention against path traversal vulnerabilities.
 
-1. Ve a la sección **[Releases](https://github.com/)** y descarga `ACC_Server_AdminPanel_v1.0.zip` (o directamente `ACC_AdminPanel.exe`).
-2. Coloca `ACC_AdminPanel.exe` dentro de la carpeta `server` de tu servidor dedicado de Steam:
+---
+
+## 🚀 Quick Start Guide (For Admins / End Users)
+
+You do not need to install Python or compile anything.
+
+1. Go to the **[Releases](https://github.com/)** section and download `ACC_Server_AdminPanel_v1.0.zip` (or directly `ACC_AdminPanel.exe`).
+2. Place `ACC_AdminPanel.exe` inside the `server` folder of your Steam dedicated server:
    ```text
    C:\Program Files (x86)\Steam\steamapps\common\Assetto Corsa Competizione Dedicated Server\server
    ```
-3. Haz doble clic en `ACC_AdminPanel.exe`:
-   * Windows solicitará permisos de Administrador (UAC) para gestionar `accServer.exe` en `Program Files`.
-   * Tu navegador web se abrirá automáticamente con el panel autenticado: `http://127.0.0.1:8080/?token=...`
-4. ¡Listo! Puedes encender el servidor, activar la rotación automática o saltar a cualquier pista con un clic.
+3. Double-click `ACC_AdminPanel.exe`:
+   * Windows will request Administrator (UAC) permissions to manage `accServer.exe` in `Program Files`.
+   * Your web browser will open automatically with the authenticated panel: `http://127.0.0.1:8080/?token=...`
+4. That's it! You can now start the server, enable automatic rotation, or jump to any track with a single click.
 
 ---
 
-## 🛠️ Guía para Desarrolladores (Código Fuente)
+## 🛠️ Developer Guide (Source Code)
 
-### Requisitos Previos
+### Prerequisites
 * Windows 10 / 11 / Windows Server
-* Python 3.10 o superior (solo estándar de Python, sin dependencias obligatorias de terceros para ejecutar el servidor)
-* Assetto Corsa Competizione Dedicated Server (instalado via Steam)
+* Python 3.10 or higher (standard Python only, no mandatory third-party dependencies to run the server)
+* Assetto Corsa Competizione Dedicated Server (installed via Steam)
 
-### Ejecutar desde Código Fuente
-1. Clona este repositorio dentro de tu carpeta `server` de ACC:
+### Run from Source Code
+1. Clone this repository inside your ACC `server` folder:
    ```bash
-   git clone https://github.com/TU_USUARIO/ACC-Dedicated-Server-AdminPanel.git .
+   git clone https://github.com/YOUR_USERNAME/ACC-Dedicated-Server-AdminPanel.git .
    ```
-2. Ejecuta el lanzador por lotes:
+2. Run the batch launcher:
    ```cmd
    Iniciar_Admin_Panel.bat
    ```
-   o directamente con Python:
+   or directly with Python:
    ```bash
    python AdminPanel/panel_server.py
    ```
 
-### Opciones de Línea de Comandos
+### Command Line Options
 ```text
-python AdminPanel/panel_server.py [PUERTO] [OPCIONES]
+python AdminPanel/panel_server.py [PORT] [OPTIONS]
 
-Opciones:
-  --lan                Permitir conexiones desde cualquier IP local en la red (0.0.0.0)
-  --no-open            No abrir el navegador automáticamente al iniciar
-  --no-uac             Omitir la comprobación/solicitud de elevación UAC
-  --server-dir <ruta>  Especificar manualmente la ruta a la carpeta 'server'
-  --help, -h           Mostrar ayuda
+Options:
+  --lan              Allow connections from any local IP on the network (0.0.0.0)
+  --no-open          Do not open the browser automatically on startup
+  --no-uac           Skip the UAC elevation check/prompt
+  --server-dir <dir> Manually specify the path to the 'server' folder
+  --help, -h         Show help
 ```
 
 ---
 
-## 🔨 Cómo Compilar el Ejecutable (.exe) Release
+## 🔨 How to Build the Release Executable (.exe)
 
-Para generar el archivo ejecutable `.exe` standalone con PyInstaller:
+To generate the standalone `.exe` executable file with PyInstaller:
 
-1. Asegúrate de tener Python 3.10+ en tu PATH.
-2. Haz doble clic en `AdminPanel/build_release.bat` o ejecuta:
+1. Ensure you have Python 3.10+ in your PATH.
+2. Double-click `AdminPanel/build_release.bat` or run:
    ```bash
    python AdminPanel/build_exe.py
    ```
-3. El script automáticamente:
-   * Instala PyInstaller si no está presente.
-   * Empaqueta el frontend web (`web/`) y las plantillas de circuitos (`tracks_pool/`) dentro del binario.
-   * Inserta el manifiesto UAC (`--uac-admin`).
-   * Genera el ejecutable listo en `ACC_AdminPanel.exe` y el paquete `release/ACC_Server_AdminPanel_v1.0.zip`.
+3. The script will automatically:
+   * Install PyInstaller if it is not present.
+   * Package the web frontend (`web/`) and track templates (`tracks_pool/`) into the binary.
+   * Insert the UAC manifest (`--uac-admin`).
+   * Generate the ready-to-use executable at `ACC_AdminPanel.exe` and the `release/ACC_Server_AdminPanel_v1.0.zip` package.
 
 ---
 
-## 🗺️ Catálogo de los 25 Circuitos Incluidos
+## 🗺️ Catalog of the 25 Included Circuits
 
-El repositorio incluye plantillas calibradas en `tracks_pool/` para la totalidad de circuitos existentes en Assetto Corsa Competizione:
+The repository includes calibrated templates in `tracks_pool/` for all existing circuits in Assetto Corsa Competizione:
 
-| DLC / Categoría | Circuitos Incluidos | Archivos de Plantilla |
+| DLC / Category | Included Circuits | Template Files |
 | :--- | :--- | :--- |
-| **Juego Base** (11) | Monza, Spa-Francorchamps, Silverstone, Nürburgring GP, Barcelona, Brands Hatch, Misano, Paul Ricard, Zolder, Hungaroring, Zandvoort | `monza.json`, `spa.json`, `silverstone.json`, `nurburgring.json`, `barcelona.json`, `brands_hatch.json`, `misano.json`, `paul_ricard.json`, `zolder.json`, `hungaroring.json`, `zandvoort.json` |
+| **Base Game** (11) | Monza, Spa-Francorchamps, Silverstone, Nürburgring GP, Barcelona, Brands Hatch, Misano, Paul Ricard, Zolder, Hungaroring, Zandvoort | `monza.json`, `spa.json`, `silverstone.json`, `nurburgring.json`, `barcelona.json`, `brands_hatch.json`, `misano.json`, `paul_ricard.json`, `zolder.json`, `hungaroring.json`, `zandvoort.json` |
 | **Intercontinental GT Pack** (4) | Kyalami, Mount Panorama (Bathurst), Suzuka, Laguna Seca | `kyalami.json`, `mount_panorama.json`, `suzuka.json`, `laguna_seca.json` |
 | **British GT Pack** (3) | Donington Park, Oulton Park, Snetterton 300 | `donington.json`, `oulton_park.json`, `snetterton.json` |
 | **American Track Pack (USA)** (3) | Circuit of the Americas (COTA), Indianapolis, Watkins Glen | `cota.json`, `indianapolis.json`, `watkins_glen.json` |
@@ -123,40 +123,40 @@ El repositorio incluye plantillas calibradas en `tracks_pool/` para la totalidad
 
 ---
 
-## 📁 Arquitectura del Repositorio
+## 📁 Repository Architecture
 
 ```text
 server/
 │
-├── Iniciar_Admin_Panel.bat            # Lanzador inteligente (prioriza .exe sobre python)
-├── README.md                          # Documentación del proyecto
-├── LICENSE                            # Licencia MIT
-├── .gitignore                         # Exclusiones de seguridad y binarios de Steam
+├── Iniciar_Admin_Panel.bat            # Smart launcher (prioritizes .exe over python)
+├── README.md                          # Project documentation
+├── LICENSE                            # MIT License
+├── .gitignore                         # Security and Steam binaries exclusions
 │
-├── AdminPanel/                        # Módulo del panel de control
-│   ├── panel_server.py                # Backend HTTP, REST API y Orquestador en segundo plano
-│   ├── build_exe.py                   # Script de compilación y empaquetado de Release 1.0
-│   ├── build_release.bat              # Compilador en un solo clic
-│   ├── Iniciar_Admin_Panel.bat        # Lanzador local
-│   └── web/                           # Frontend web (HTML5 / Vanilla CSS / Vanilla JS)
-│       ├── index.html                 # Tableros KPI, centro de mandos, telemetría y consola
-│       ├── css/style.css              # Sistema de diseño GT3 Motorsport Glassmorphism
-│       └── js/app.js                  # Lógica reactiva y llamadas a la REST API
+├── AdminPanel/                        # Control panel module
+│   ├── panel_server.py                # HTTP Backend, REST API, and Background Orchestrator
+│   ├── build_exe.py                   # Compilation and Release 1.0 packaging script
+│   ├── build_release.bat              # One-click compiler
+│   ├── Iniciar_Admin_Panel.bat        # Local launcher
+│   └── web/                           # Web frontend (HTML5 / Vanilla CSS / Vanilla JS)
+│       ├── index.html                 # KPI dashboards, command center, telemetry, and console
+│       ├── css/style.css              # GT3 Motorsport Glassmorphism design system
+│       └── js/app.js                  # Reactive logic and REST API calls
 │
-├── tracks_pool/                       # Depósito con las 25 plantillas oficiales de circuitos
+├── tracks_pool/                       # Repository with the 25 official circuit templates
 │   └── *.json
 │
-└── cfg/                               # Plantillas de configuración
-    ├── rotation_config.json           # Estado de rotación y DLCs activos
-    ├── settings.json.example          # Plantilla sanitizada de settings
-    ├── configuration.json.example     # Plantilla de puertos de red
-    └── assistRules.json.example       # Plantilla de ayudas de conducción
+└── cfg/                               # Configuration templates
+    ├── rotation_config.json           # Rotation state and active DLCs
+    ├── settings.json.example          # Sanitized settings template
+    ├── configuration.json.example     # Network ports template
+    └── assistRules.json.example       # Driving assists template
 ```
 
 ---
 
-## 📄 Licencia
+## 📄 License
 
-Este proyecto está bajo la Licencia **MIT**. Consulta el archivo [LICENSE](LICENSE) para más detalles.
+This project is licensed under the **MIT** License. See the [LICENSE](LICENSE) file for more details.
 
-*Assetto Corsa Competizione es una marca registrada de Kunos Simulazioni Srl y Digital Bros Group. Este proyecto es una herramienta independiente desarrollada por la comunidad y no está afiliada oficialmente con Kunos Simulazioni.*
+*Assetto Corsa Competizione is a registered trademark of Kunos Simulazioni Srl and Digital Bros Group. This project is an independent community-developed tool and is not officially affiliated with Kunos Simulazioni.*

@@ -1,6 +1,7 @@
 {
-  "serverName": "ACC Community Dedicated Server [AdminPanel]",
-  "adminPassword": "change_this_admin_password",
+  "serverName": "ACC Dedicated Server",
+  "adminPassword": "your_admin_password_here",
+
   "carGroup": "FreeForAll",
   "trackMedalsRequirement": 0,
   "safetyRatingRequirement": -1,

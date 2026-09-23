@@ -1,0 +1,750 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="referrer" content="no-referrer">
+  <title>ACC Dedicated Server — Admin Control Panel</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Rajdhani:wght@500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+
+  <!-- Background Animated Motorsport Glows -->
+  <div class="ambient-glow glow-red"></div>
+  <div class="ambient-glow glow-cyan"></div>
+
+  <!-- Top Navigation Header -->
+  <header class="app-header">
+    <div class="brand-container">
+      <div class="racing-stripes">
+        <span class="stripe red"></span>
+        <span class="stripe white"></span>
+        <span class="stripe cyan"></span>
+      </div>
+      <div class="brand-text">
+        <h1 id="app-title">ACC SERVER CONTROL</h1>
+        <span class="brand-subtitle">Assetto Corsa Competizione Dedicated Orchestrator</span>
+      </div>
+    </div>
+
+    <div class="header-status-group">
+      <!-- Live Server Badge -->
+      <div class="status-indicator-badge" id="server-status-badge">
+        <span class="pulsing-dot" id="server-status-dot"></span>
+        <span class="status-text" id="server-status-text">OFFLINE</span>
+      </div>
+
+      <!-- Network Ports Tag -->
+      <div class="network-badge">
+        <span class="net-item"><strong class="net-label">UDP</strong> 9231</span>
+        <span class="net-divider">/</span>
+        <span class="net-item"><strong class="net-label">TCP</strong> 9232</span>
+      </div>
+
+      <!-- Live Clock / Uptime -->
+      <div class="uptime-badge">
+        <span class="uptime-label">UPTIME</span>
+        <span class="uptime-time" id="server-uptime-val">00:00:00</span>
+      </div>
+    </div>
+  </header>
+
+  <!-- Main Dashboard Layout -->
+  <main class="main-container">
+
+    <!-- Global Operations Control Bar -->
+    <section class="control-banner">
+      <div class="control-actions">
+        <button id="btn-start" class="btn btn-action btn-start" title="Iniciar accServer.exe">
+          <svg class="icon" viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>
+          <span>Iniciar Servidor</span>
+        </button>
+
+        <button id="btn-restart" class="btn btn-action btn-restart" title="Reiniciar accServer.exe limpiando sockets">
+          <svg class="icon" viewBox="0 0 24 24"><path d="M17.65 6.35C16.2 4.9 14.21 4 12 4c-4.42 0-7.99 3.58-7.99 8s3.57 8 7.99 8c3.73 0 6.84-2.55 7.73-6h-2.08c-.82 2.33-3.04 4-5.65 4-3.31 0-6-2.69-6-6s2.69-6 6-6c1.66 0 3.14.69 4.22 1.78L13 11h7V4l-2.35 2.35z"/></svg>
+          <span>Reiniciar</span>
+        </button>
+
+        <button id="btn-stop" class="btn btn-action btn-stop" title="Detener accServer forzando taskkill">
+          <svg class="icon" viewBox="0 0 24 24"><path d="M6 6h12v12H6z"/></svg>
+          <span>Detener</span>
+        </button>
+      </div>
+
+      <div class="control-rotation-cluster">
+        <!-- Toggle Auto-Rotation -->
+        <div class="toggle-container" title="Activa o pausa la rotación automática tras cada carrera">
+          <span class="toggle-label">Auto-Rotación:</span>
+          <label class="switch">
+            <input type="checkbox" id="auto-rotation-toggle" checked>
+            <span class="slider round"></span>
+          </label>
+          <span class="toggle-status" id="auto-rotation-status-badge">ACTIVA</span>
+        </div>
+
+        <!-- Quick Skip Track Button -->
+        <button id="btn-skip-track" class="btn btn-secondary btn-skip" title="Saltar de inmediato a la siguiente pista del pool">
+          <svg class="icon" viewBox="0 0 24 24"><path d="M6 18l8.5-6L6 6v12zM16 6v12h2V6h-2z"/></svg>
+          <span>Siguiente Pista</span>
+        </button>
+
+        <!-- Direct Track Selector Dropdown -->
+        <div class="quick-track-selector">
+          <select id="select-direct-track" class="custom-select">
+            <option value="">Cargando pistas...</option>
+          </select>
+          <button id="btn-apply-track" class="btn btn-secondary">Cargar</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- KPI Metric Cards Grid -->
+    <section class="kpi-grid">
+      <!-- Card 1: Server Status & Process -->
+      <div class="kpi-card glass-panel">
+        <div class="kpi-header">
+          <span class="kpi-icon status-color-icon">
+            <svg viewBox="0 0 24 24"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 14H9V8h2v8zm4 0h-2V8h2v8z"/></svg>
+          </span>
+          <span class="kpi-title">Proceso de Simulación</span>
+        </div>
+        <div class="kpi-value-block">
+          <span class="kpi-main-val" id="kpi-server-state">OFFLINE</span>
+          <span class="kpi-sub-val" id="kpi-server-pid">PID: —</span>
+        </div>
+        <div class="kpi-footer" id="kpi-status-message">
+          Esperando comando de inicio...
+        </div>
+      </div>
+
+      <!-- Card 2: Active Track -->
+      <div class="kpi-card glass-panel highlight-track">
+        <div class="kpi-header">
+          <span class="kpi-icon track-color-icon">
+            <svg viewBox="0 0 24 24"><path d="M12 2c-4.4 0-8 3.6-8 8 0 5.4 7 11.4 7.3 11.7.4.3.9.3 1.3 0 .4-.3 7.4-6.3 7.4-11.7 0-4.4-3.6-8-8-8zm0 11c-1.7 0-3-1.3-3-3s1.3-3 3-3 3 1.3 3 3-1.3 3-3 3z"/></svg>
+          </span>
+          <span class="kpi-title">Circuito en Carrera</span>
+        </div>
+        <div class="kpi-value-block">
+          <span class="kpi-main-val uppercase" id="kpi-track-name">MONZA</span>
+          <span class="kpi-sub-val" id="kpi-track-file">cfg/event.json</span>
+        </div>
+        <div class="kpi-footer" id="kpi-track-weather">
+          Temp: 25°C | Nubes: 10% | Lluvia: 0%
+        </div>
+      </div>
+
+      <!-- Card 3: Sessions Timeline -->
+      <div class="kpi-card glass-panel">
+        <div class="kpi-header">
+          <span class="kpi-icon session-color-icon">
+            <svg viewBox="0 0 24 24"><path d="M11.99 2C6.47 2 2 6.48 2 12s4.47 10 9.99 10C17.52 22 22 17.52 22 12S17.52 2 11.99 2zM12 20c-4.42 0-8-3.58-8-8s3.58-8 8-8 8 3.58 8 8-3.58 8-8 8zm.5-13H11v6l5.25 3.15.75-1.23-4.5-2.67z"/></svg>
+          </span>
+          <span class="kpi-title">Formato del Fin de Semana</span>
+        </div>
+        <div class="kpi-value-block sessions-pill-container" id="kpi-sessions-container">
+          <span class="session-pill fp">FP: 10m</span>
+          <span class="session-pill q">Q: 15m</span>
+          <span class="session-pill r">R: 20m</span>
+        </div>
+        <div class="kpi-footer">
+          Cierre en carrera: <strong id="kpi-race-locked">Bloqueado</strong>
+        </div>
+      </div>
+
+      <!-- Card 4: Slots & Lobby -->
+      <div class="kpi-card glass-panel">
+        <div class="kpi-header">
+          <span class="kpi-icon slots-color-icon">
+            <svg viewBox="0 0 24 24"><path d="M16 11c1.66 0 2.99-1.34 2.99-3S17.66 5 16 5c-1.66 0-3 1.34-3 3s1.34 3 3 3zm-8 0c1.66 0 2.99-1.34 2.99-3S9.66 5 8 5C6.34 5 5 6.34 5 8s1.34 3 3 3zm0 2c-2.33 0-7 1.17-7 3.5V19h14v-2.5c0-2.33-4.67-3.5-7-3.5zm8 0c-.29 0-.62.02-.97.05 1.16.84 1.97 1.97 1.97 3.45V19h6v-2.5c0-2.33-4.67-3.5-7-3.5z"/></svg>
+          </span>
+          <span class="kpi-title">Parrilla y Conexiones</span>
+        </div>
+        <div class="kpi-value-block">
+          <span class="kpi-main-val" id="kpi-max-slots">24 SLOTS</span>
+          <span class="kpi-sub-val">Max Conx: 85</span>
+        </div>
+        <div class="kpi-footer" id="kpi-server-room-name">
+          [CL] Server Oscuro | LUKAS GAY
+        </div>
+      </div>
+    </section>
+
+    <!-- Interactive Navigation Tabs -->
+    <nav class="tabs-nav">
+      <button class="tab-btn active" data-tab="tab-telemetry">
+        <svg class="icon" viewBox="0 0 24 24"><path d="M3 13h8V3H3v10zm0 8h8v-6H3v6zm10 0h8V11h-8v10zm0-18v6h8V3h-8z"/></svg>
+        <span>Telemetría & Leaderboard</span>
+      </button>
+
+      <button class="tab-btn" data-tab="tab-players">
+        <svg class="icon" viewBox="0 0 24 24"><path d="M16 11c1.66 0 2.99-1.34 2.99-3S17.66 5 16 5c-1.66 0-3 1.34-3 3s1.34 3 3 3zm-8 0c1.66 0 2.99-1.34 2.99-3S9.66 5 8 5C6.34 5 5 6.34 5 8s1.34 3 3 3zm0 2c-2.33 0-7 1.17-7 3.5V19h14v-2.5c0-2.33-4.67-3.5-7-3.5zm8 0c-.29 0-.62.02-.97.05 1.16.84 1.97 1.97 1.97 3.45V19h6v-2.5c0-2.33-4.67-3.5-7-3.5z"/></svg>
+        <span>Pilotos & Moderación</span>
+        <span class="badge-counter" id="active-players-counter">0</span>
+      </button>
+
+      <button class="tab-btn" data-tab="tab-config">
+        <svg class="icon" viewBox="0 0 24 24"><path d="M19.14 12.94c.04-.3.06-.61.06-.94 0-.32-.02-.64-.07-.94l2.03-1.58c.18-.14.23-.41.12-.61l-1.92-3.32c-.12-.22-.37-.29-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54c-.04-.24-.24-.41-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96c-.22-.08-.47 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.05.3-.09.63-.09.94s.02.64.07.94l-2.03 1.58c-.18.14-.23.41-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.47-.12-.61l-2.01-1.58zM12 15.6c-1.98 0-3.6-1.62-3.6-3.6s1.62-3.6 3.6-3.6 3.6 1.62 3.6 3.6-1.62 3.6-3.6 3.6z"/></svg>
+        <span>Configuración en Caliente</span>
+      </button>
+
+      <button class="tab-btn" data-tab="tab-tracks">
+        <svg class="icon" viewBox="0 0 24 24"><path d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7zm0 9.5c-1.38 0-2.5-1.12-2.5-2.5s1.12-2.5 2.5-2.5 2.5 1.12 2.5 2.5-1.12 2.5-2.5 2.5z"/></svg>
+        <span>Pool de Circuitos</span>
+      </button>
+
+      <button class="tab-btn" data-tab="tab-logs">
+        <svg class="icon" viewBox="0 0 24 24"><path d="M20 4H4c-1.1 0-1.99.9-1.99 2L2 18c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2zm-5 14H4v-4h11v4zm0-5H4V9h11v4zm5 5h-4V9h4v9z"/></svg>
+        <span>Consola & Logs</span>
+      </button>
+    </nav>
+
+    <!-- Tab 1: Telemetry & Leaderboards -->
+    <div id="tab-telemetry" class="tab-content active">
+      <div class="telemetry-dashboard-layout">
+        
+        <!-- Track Records Highlight Cards -->
+        <div class="records-banner">
+          <div class="section-title-box">
+            <h3 class="section-heading">⚡ Récords de Vuelta por Circuito (Histórico)</h3>
+            <span class="section-sub">Volcados oficiales desde la telemetría results/*.json</span>
+          </div>
+          <div class="track-records-grid" id="track-records-container">
+            <div class="loading-state">Cargando récords...</div>
+          </div>
+        </div>
+
+        <!-- Drivers Ranking & Last Race Dual Grid -->
+        <div class="dual-telemetry-grid">
+          <!-- Drivers Table -->
+          <div class="panel-box glass-panel">
+            <div class="panel-box-header">
+              <h4 class="panel-box-title">🏆 Salón de la Fama: Ranking de Pilotos</h4>
+              <span class="badge-tag">results/</span>
+            </div>
+            <div class="table-container">
+              <table class="motorsport-table">
+                <thead>
+                  <tr>
+                    <th>Piloto</th>
+                    <th class="text-center">Victorias</th>
+                    <th class="text-center">Podios</th>
+                    <th class="text-center">Carreras</th>
+                    <th class="text-center">Vueltas Totales</th>
+                  </tr>
+                </thead>
+                <tbody id="drivers-ranking-tbody">
+                  <tr><td colspan="5" class="text-center">Consultando resultados...</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          <!-- Recent Sessions List -->
+          <div class="panel-box glass-panel">
+            <div class="panel-box-header">
+              <h4 class="panel-box-title">⏱️ Últimas Sesiones Registradas</h4>
+              <button id="btn-refresh-telemetry" class="btn btn-sm btn-secondary">Actualizar</button>
+            </div>
+            <div class="sessions-history-list" id="recent-sessions-list">
+              <div class="loading-state">Cargando sesiones...</div>
+            </div>
+          </div>
+        </div>
+
+      </div>
+    </div>
+
+    <!-- Tab: Live Players & Moderation -->
+    <div id="tab-players" class="tab-content">
+      <div class="players-moderation-layout">
+        
+        <!-- Header Banner -->
+        <div class="section-title-box flex-between">
+          <div>
+            <h3 class="section-heading">👥 Supervisión de Pilotos y Control de Carrera</h3>
+            <span class="section-sub">Detección en tiempo real de pilotos conectados, comandos de sanción oficiales de ACC, lista negra y entry list</span>
+          </div>
+          <button id="btn-refresh-players" class="btn btn-sm btn-secondary">
+            <svg class="icon" viewBox="0 0 24 24"><path d="M17.65 6.35C16.2 4.9 14.21 4 12 4c-4.42 0-7.99 3.58-7.99 8s3.57 8 7.99 8c3.73 0 6.84-2.55 7.73-6h-2.08c-.82 2.33-3.04 4-5.65 4-3.31 0-6-2.69-6-6s2.69-6 6-6c1.66 0 3.14.69 4.22 1.78L13 11h7V4l-2.35 2.35z"/></svg>
+            <span>Actualizar Pilotos</span>
+          </button>
+        </div>
+
+        <!-- Section 1: Active Players Live -->
+        <div class="panel-box glass-panel live-drivers-card">
+          <div class="panel-box-header">
+            <div class="header-with-pulse">
+              <span class="pulsing-dot-green"></span>
+              <h4 class="panel-box-title">Pilotos en Pista / Conectados Ahora</h4>
+            </div>
+            <span class="badge-tag" id="live-drivers-count-tag">0 Pilotos en Línea</span>
+          </div>
+
+          <div class="table-container">
+            <table class="motorsport-table">
+              <thead>
+                <tr>
+                  <th style="width: 80px;">Auto</th>
+                  <th>Piloto</th>
+                  <th>Modelo de Coche</th>
+                  <th>Steam ID</th>
+                  <th class="text-center">Ping</th>
+                  <th class="text-center">Estado</th>
+                  <th class="text-center">Control de Carrera</th>
+                </tr>
+              </thead>
+              <tbody id="active-players-tbody">
+                <tr><td colspan="7" class="text-center loading-state">Buscando pilotos en vivo en server.log...</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <!-- Section 2: Recent Drivers History -->
+        <div class="panel-box glass-panel">
+          <div class="panel-box-header">
+            <h4 class="panel-box-title">⏱️ Pilotos Vistos en Sesiones Recientes (Historial de Resultados)</h4>
+            <span class="badge-tag">results/*.json</span>
+          </div>
+          <div class="table-container">
+            <table class="motorsport-table">
+              <thead>
+                <tr>
+                  <th style="width: 70px;">Auto</th>
+                  <th>Piloto</th>
+                  <th>Modelo de Auto</th>
+                  <th>Steam ID</th>
+                  <th class="text-center">Mejor Vuelta</th>
+                  <th class="text-center">Vueltas</th>
+                  <th class="text-center">Rol</th>
+                  <th class="text-center">Acciones</th>
+                </tr>
+              </thead>
+              <tbody id="recent-players-tbody">
+                <tr><td colspan="8" class="text-center loading-state">Cargando historial de pilotos...</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <!-- Dual Grid: Banlist & EntryList -->
+        <div class="dual-telemetry-grid">
+          <!-- Box 3: Banlist / Blacklist -->
+          <div class="panel-box glass-panel">
+            <div class="panel-box-header">
+              <h4 class="panel-box-title">🚫 Lista Negra & Bloqueos Permanentes</h4>
+              <span class="badge-tag">cfg/banlist.json</span>
+            </div>
+            
+            <form id="form-add-ban" class="compact-form-row">
+              <input type="text" id="ban-input-pid" class="form-input" placeholder="SteamID (S765611...)" required>
+              <input type="text" id="ban-input-name" class="form-input" placeholder="Nombre Piloto" required>
+              <input type="text" id="ban-input-reason" class="form-input" placeholder="Motivo de Baneo" required>
+              <button type="submit" class="btn btn-sm btn-stop">Banear</button>
+            </form>
+
+            <div class="table-container margin-top-sm">
+              <table class="motorsport-table">
+                <thead>
+                  <tr>
+                    <th>Piloto</th>
+                    <th>Steam ID</th>
+                    <th>Motivo</th>
+                    <th class="text-center">Acción</th>
+                  </tr>
+                </thead>
+                <tbody id="banlist-tbody">
+                  <tr><td colspan="4" class="text-center">No hay pilotos baneados.</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          <!-- Box 4: EntryList & Whitelist -->
+          <div class="panel-box glass-panel">
+            <div class="panel-box-header">
+              <h4 class="panel-box-title">👑 Entry List & Pilotos VIP (ACC Core)</h4>
+              <span class="badge-tag">cfg/entrylist.json</span>
+            </div>
+
+            <div class="whitelist-toggle-bar">
+              <label class="switch switch-sm">
+                <input type="checkbox" id="toggle-force-entrylist">
+                <span class="slider round"></span>
+              </label>
+              <span class="toggle-sub-label"><strong>Whitelist Estricta (forceEntryList):</strong> Solo pilotos registrados podrán entrar</span>
+            </div>
+
+            <form id="form-add-entry" class="compact-form-row margin-top-sm">
+              <input type="text" id="entry-input-pid" class="form-input" placeholder="SteamID (S765611...)" required>
+              <input type="text" id="entry-input-name" class="form-input" placeholder="Nombre Piloto" required>
+              <input type="number" id="entry-input-num" class="form-input input-short" placeholder="# Auto" min="1" max="998" value="99">
+              <label class="checkbox-label" title="Asigna rango de Administrador sin escribir /admin">
+                <input type="checkbox" id="entry-input-is-admin" checked> Admin
+              </label>
+              <button type="submit" class="btn btn-sm btn-start">Registrar</button>
+            </form>
+
+            <div class="table-container margin-top-sm">
+              <table class="motorsport-table">
+                <thead>
+                  <tr>
+                    <th>Piloto</th>
+                    <th>Steam ID</th>
+                    <th class="text-center">Auto</th>
+                    <th class="text-center">Rango</th>
+                    <th class="text-center">Acción</th>
+                  </tr>
+                </thead>
+                <tbody id="entrylist-tbody">
+                  <tr><td colspan="5" class="text-center">Cargando entry list...</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+
+      </div>
+    </div>
+
+    <!-- Tab 2: Hot Configuration Editor -->
+    <div id="tab-config" class="tab-content">
+      <div class="config-editor-layout glass-panel">
+        <div class="config-header-alert">
+          <div class="alert-icon">🛡️</div>
+          <div class="alert-content">
+            <strong>Protección de Codificación UTF-16 LE Activa</strong>
+            <p>Al guardar, el orquestador escribe <code>settings.json</code> y <code>configuration.json</code> con el BOM binario exacto requerido por el motor en C++ de ACC para evitar crashes.</p>
+          </div>
+        </div>
+
+        <form id="config-form" class="config-form-grid">
+          <!-- Column 1: Server Settings -->
+          <div class="form-column">
+            <h4 class="form-col-title">Parámetros del Servidor</h4>
+
+            <div class="form-group">
+              <label for="cfg-server-name">Nombre de la Sala</label>
+              <input type="text" id="cfg-server-name" class="form-input" required>
+            </div>
+
+            <div class="form-group">
+              <label for="cfg-admin-password">Contraseña de Administrador</label>
+              <input type="password" id="cfg-admin-password" class="form-input" autocomplete="current-password" required>
+            </div>
+
+            <div class="form-group">
+              <label for="cfg-server-password">Contraseña de Acceso (Opcional)</label>
+              <input type="password" id="cfg-server-password" class="form-input" autocomplete="new-password" placeholder="Vacío para acceso público">
+            </div>
+
+            <div class="form-row">
+              <div class="form-group">
+                <label for="cfg-max-slots">Slots de Coches</label>
+                <input type="number" id="cfg-max-slots" class="form-input" min="2" max="100" value="24">
+              </div>
+              <div class="form-group">
+                <label for="cfg-is-race-locked">Bloquear en Carrera</label>
+                <select id="cfg-is-race-locked" class="form-input">
+                  <option value="1">1 (Activado)</option>
+                  <option value="0">0 (Desactivado)</option>
+                </select>
+              </div>
+            </div>
+
+            <div class="form-row">
+              <div class="form-group">
+                <label for="cfg-car-group">Categoría de Autos</label>
+                <select id="cfg-car-group" class="form-input">
+                  <option value="FreeForAll">FreeForAll (GT3, GT4, Cup)</option>
+                  <option value="GT3">GT3</option>
+                  <option value="GT4">GT4</option>
+                  <option value="Cup">Cup</option>
+                </select>
+              </div>
+              <div class="form-group">
+                <label for="cfg-dump-leaderboards">Dump Leaderboards</label>
+                <input type="number" id="cfg-dump-leaderboards" class="form-input" value="1" readonly>
+              </div>
+            </div>
+          </div>
+
+          <!-- Column 2: Event & Weather -->
+          <div class="form-column">
+            <h4 class="form-col-title">Duración de Sesiones y Clima</h4>
+
+            <div class="form-row">
+              <div class="form-group">
+                <label for="cfg-duration-fp">Práctica (Min)</label>
+                <input type="number" id="cfg-duration-fp" class="form-input" min="3" max="180" value="10">
+              </div>
+              <div class="form-group">
+                <label for="cfg-duration-q">Clasificación (Min)</label>
+                <input type="number" id="cfg-duration-q" class="form-input" min="3" max="180" value="15">
+              </div>
+              <div class="form-group">
+                <label for="cfg-duration-r">Carrera (Min)</label>
+                <input type="number" id="cfg-duration-r" class="form-input" min="3" max="360" value="20">
+              </div>
+            </div>
+
+            <div class="form-row">
+              <div class="form-group">
+                <label for="cfg-ambient-temp">Temperatura (°C)</label>
+                <input type="number" id="cfg-ambient-temp" class="form-input" min="10" max="40" value="25">
+              </div>
+              <div class="form-group">
+                <label for="cfg-cloud-level">Nubes (0.0 - 1.0)</label>
+                <input type="number" step="0.1" id="cfg-cloud-level" class="form-input" min="0" max="1" value="0.1">
+              </div>
+            </div>
+
+            <div class="form-row">
+              <div class="form-group">
+                <label for="cfg-rain">Lluvia (0.0 - 1.0)</label>
+                <input type="number" step="0.1" id="cfg-rain" class="form-input" min="0" max="1" value="0.0">
+              </div>
+              <div class="form-group">
+                <label for="cfg-weather-random">Variabilidad Clima</label>
+                <input type="number" id="cfg-weather-random" class="form-input" min="1" max="10" value="1">
+              </div>
+            </div>
+
+            <h4 class="form-col-title margin-top-md">Ayudas de Conducción</h4>
+            <div class="form-row">
+              <div class="form-group">
+                <label for="cfg-stability-control">Control Estabilidad Máx (%)</label>
+                <input type="number" id="cfg-stability-control" class="form-input" min="0" max="100" value="100">
+              </div>
+              <div class="form-group">
+                <label for="cfg-disable-ideal-line">Línea Ideal</label>
+                <select id="cfg-disable-ideal-line" class="form-input">
+                  <option value="0">Permitida (0)</option>
+                  <option value="1">Prohibida (1)</option>
+                </select>
+              </div>
+            </div>
+          </div>
+
+          <!-- Form Submit Footer -->
+          <div class="form-footer-action">
+            <button type="submit" class="btn btn-action btn-start btn-lg" id="btn-save-config">
+              <svg class="icon" viewBox="0 0 24 24"><path d="M17 3H5c-1.11 0-2 .9-2 2v14c0 1.1.89 2 2 2h14c1.1 0 2-.9 2-2V7l-4-4zm-5 16c-1.66 0-3-1.34-3-3s1.34-3 3-3 3 1.34 3 3-1.34 3-3 3zm3-10H5V5h10v4z"/></svg>
+              <span>Guardar Configuración en Caliente</span>
+            </button>
+            <span class="save-tip">Nota: Los cambios en event.json se aplican de inmediato en el siguiente reinicio.</span>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <!-- Tab 3: Tracks Pool & DLC Rotation Manager -->
+    <div id="tab-tracks" class="tab-content">
+      <div class="tracks-pool-layout">
+        
+        <!-- Control Header & Master Toggles Panel -->
+        <div class="tracks-header-wrapper glass-panel">
+          <div class="tracks-header-top">
+            <div class="section-title-box">
+              <h3 class="section-heading">🏁 Catálogo Oficial & Gestor de Rotación por DLCs</h3>
+              <span class="section-sub">Configura qué paquetes de contenido (DLCs) y circuitos específicos forman parte de la rotación automática del servidor</span>
+            </div>
+
+            <!-- Global Status Badge -->
+            <div class="rotation-stats-badge">
+              <span class="stat-label">En Rotación Activa:</span>
+              <strong id="rotation-active-count" class="stat-value">25 / 25</strong>
+            </div>
+          </div>
+
+          <!-- Quick Presets Bar -->
+          <div class="rotation-presets-bar">
+            <span class="preset-label">⚡ Presets Rápidos de Rotación:</span>
+            <div class="preset-buttons-group">
+              <button id="btn-preset-all" class="btn btn-sm btn-outline active">⭐ Todos (Juego Base + Todos los DLCs)</button>
+              <button id="btn-preset-base" class="btn btn-sm btn-outline">🏁 Solo Juego Base (11 Circuitos)</button>
+              <button id="btn-preset-dlc" class="btn btn-sm btn-outline">🚀 Solo Expansiones DLC (14 Circuitos)</button>
+            </div>
+          </div>
+
+          <!-- DLC Master Switches Grid -->
+          <div class="dlc-toggles-control-panel">
+            <div class="dlc-control-panel-header">
+              <h4 class="control-panel-subtitle">🎛️ Interruptores Maestros por Categoría / DLC</h4>
+              <span class="dlc-helper-text">Activa o desactiva paquetes completos con un solo clic:</span>
+            </div>
+            <div class="dlc-chips-grid" id="dlc-chips-container">
+              <div class="loading-state">Cargando interruptores DLC...</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Categorized Tracks Sections Container -->
+        <div class="categories-tracks-container" id="categories-tracks-container">
+          <div class="loading-state">Cargando catálogo completo de 25 circuitos...</div>
+        </div>
+
+      </div>
+    </div>
+
+    <!-- Tab 4: Console & Logs -->
+    <div id="tab-logs" class="tab-content">
+      <div class="logs-console-layout glass-panel">
+        <div class="logs-toolbar">
+          <div class="logs-info">
+            <span class="logs-title">Monitor de Ejecución [server.log]</span>
+            <span class="logs-live-badge"><span class="pulsing-dot-green"></span> STREAM ACTIVO</span>
+          </div>
+          <div class="logs-actions">
+            <label class="logs-lines-selector">
+              Líneas:
+              <select id="select-log-lines" class="custom-select-sm">
+                <option value="50">50</option>
+                <option value="100" selected>100</option>
+                <option value="200">200</option>
+                <option value="500">500</option>
+              </select>
+            </label>
+            <button id="btn-refresh-logs" class="btn btn-sm btn-secondary">Refrescar</button>
+            <button id="btn-autoscroll-toggle" class="btn btn-sm btn-secondary active">Auto-Scroll: ON</button>
+          </div>
+        </div>
+
+        <div class="terminal-window" id="logs-terminal-window">
+          <pre id="logs-content" class="terminal-content">Cargando registros del servidor...</pre>
+        </div>
+      </div>
+    </div>
+
+  </main>
+
+  <!-- Interactive Moderation & Commands Modal -->
+  <div id="moderation-modal" class="modal-overlay hidden">
+    <div class="modal-dialog glass-panel" role="dialog" aria-modal="true" aria-labelledby="mod-modal-driver-name">
+      <div class="modal-header">
+        <div class="modal-title-group">
+          <span class="modal-badge-car" id="mod-modal-car-badge">#97</span>
+          <div>
+            <h3 class="modal-driver-name" id="mod-modal-driver-name">Patricio Schumacher</h3>
+            <span class="modal-car-model" id="mod-modal-car-model">Porsche 992 GT3 R</span>
+          </div>
+        </div>
+        <button type="button" class="modal-close-btn" id="btn-close-mod-modal" aria-label="Cerrar ventana de moderación">&times;</button>
+      </div>
+
+      <div class="modal-body">
+        <!-- Player details summary -->
+        <div class="modal-player-meta">
+          <span><strong>SteamID:</strong> <code id="mod-modal-steamid">S76561198399980163</code></span>
+          <a href="#" id="mod-modal-steam-link" target="_blank" rel="noopener noreferrer" class="steam-link">Ver Perfil de Steam ↗</a>
+        </div>
+
+        <!-- ACC Chat Commands Command Center -->
+        <div class="mod-section">
+          <h4 class="mod-section-title">⚡ Comandos de Moderación Oficiales (Handbook ACC)</h4>
+          <span class="mod-section-sub">Haz clic en cualquier comando para copiarlo al portapapeles y pegarlo en el chat de ACC:</span>
+          
+          <div class="commands-button-grid">
+            <button class="btn-cmd btn-cmd-danger" id="btn-cmd-kick">
+              <span class="cmd-text">/kick {car}</span>
+              <span class="cmd-desc">Expulsar de la sesión</span>
+            </button>
+
+            <button class="btn-cmd btn-cmd-danger" id="btn-cmd-ban">
+              <span class="cmd-text">/ban {car}</span>
+              <span class="cmd-desc">Baneo hasta reinicio</span>
+            </button>
+
+            <button class="btn-cmd btn-cmd-dark" id="btn-cmd-dq">
+              <span class="cmd-text">/dq {car}</span>
+              <span class="cmd-desc">Descalificar coche</span>
+            </button>
+
+            <button class="btn-cmd btn-cmd-warning" id="btn-cmd-dt">
+              <span class="cmd-text">/dt {car}</span>
+              <span class="cmd-desc">Drive-Through (3 vueltas)</span>
+            </button>
+
+            <button class="btn-cmd btn-cmd-warning" id="btn-cmd-dtc">
+              <span class="cmd-text">/dtc {car}</span>
+              <span class="cmd-desc">DT por colisión</span>
+            </button>
+
+            <button class="btn-cmd btn-cmd-warning" id="btn-cmd-sg10">
+              <span class="cmd-text">/sg10 {car}</span>
+              <span class="cmd-desc">Stop & Go (10 seg)</span>
+            </button>
+
+            <button class="btn-cmd btn-cmd-warning" id="btn-cmd-sg30">
+              <span class="cmd-text">/sg30 {car}</span>
+              <span class="cmd-desc">Stop & Go (30 seg)</span>
+            </button>
+
+            <button class="btn-cmd btn-cmd-info" id="btn-cmd-tp5">
+              <span class="cmd-text">/tp5 {car}</span>
+              <span class="cmd-desc">+5s Penalización</span>
+            </button>
+
+            <button class="btn-cmd btn-cmd-info" id="btn-cmd-tp15">
+              <span class="cmd-text">/tp15 {car}</span>
+              <span class="cmd-desc">+15s Penalización</span>
+            </button>
+
+            <button class="btn-cmd btn-cmd-success" id="btn-cmd-clear">
+              <span class="cmd-text">/clear {car}</span>
+              <span class="cmd-desc">Limpiar sanciones</span>
+            </button>
+          </div>
+        </div>
+
+        <!-- BoP Weight & Restrictor -->
+        <div class="mod-section">
+          <h4 class="mod-section-title">⚖️ Balance of Performance (BoP en Caliente)</h4>
+          <div class="bop-controls-row">
+            <div class="bop-input-group">
+              <label>Lastre (0-100 kg):</label>
+              <div class="input-with-action">
+                <input type="number" id="mod-ballast-val" min="0" max="100" value="20" class="form-input input-short">
+                <button class="btn btn-sm btn-secondary" id="btn-cmd-ballast">Copiar /ballast</button>
+              </div>
+            </div>
+            <div class="bop-input-group">
+              <label>Restrictor (0-20 %):</label>
+              <div class="input-with-action">
+                <input type="number" id="mod-restrictor-val" min="0" max="20" value="5" class="form-input input-short">
+                <button class="btn btn-sm btn-secondary" id="btn-cmd-restrictor">Copiar /restrictor</button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Permanent Identity Actions -->
+        <div class="mod-section border-top-sm">
+          <h4 class="mod-section-title">🛡️ Acciones Permanentes por Steam ID</h4>
+          <div class="perm-actions-row">
+            <button class="btn btn-action btn-start" id="btn-mod-toggle-admin">
+              <span>👑 Asignar Administrador Permanente</span>
+            </button>
+            <button class="btn btn-action btn-stop" id="btn-mod-add-ban">
+              <span>🚫 Banear de Lista Negra</span>
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <div class="modal-footer">
+        <button class="btn btn-secondary" id="btn-mod-modal-close">Cerrar</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Floating Toast Notifications -->
+  <div id="toast-container" class="toast-container"></div>
+
+  <script src="js/app.js"></script>
+</body>
+</html>

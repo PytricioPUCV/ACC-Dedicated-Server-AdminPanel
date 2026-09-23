@@ -1,0 +1,60 @@
+# ======================================================================
+# Git Ignore - Assetto Corsa Competizione Dedicated Server Admin Panel
+# ======================================================================
+
+# Binarios propietarios de Kunos Simulazioni / Steam (Instalados via Steam)
+/accServer.exe
+/ServerAdminHandbook.pdf
+
+# Archivos de sesión, tokens de autenticación y estado del panel
+panel_auth.json
+managed_acc_pid.json
+**/panel_auth.json
+**/managed_acc_pid.json
+
+# Configuraciones locales con contraseñas de sala y admin (Usa *.example)
+cfg/settings.json
+cfg/configuration.json
+cfg/event.json
+cfg/banlist.json
+cfg/entrylist.json
+cfg/current/
+*.bak
+*.tmp
+
+# Volcados de resultados del motor y telemetría de carrera (dumpLeaderboards)
+results/
+results/*
+
+# Archivos de registro del servidor ACC
+log/
+log/*
+*.log
+
+# Artefactos de compilación de PyInstaller
+build/
+dist/
+AdminPanel/build/
+AdminPanel/dist/
+*.spec
+
+# Ejecutable standalone y paquetes de distribución Release
+/ACC_AdminPanel.exe
+AdminPanel/ACC_AdminPanel.exe
+release/
+*.zip
+
+# Entornos y caches de Python
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+
+# Carpeta web obsoleta en raíz (la suite oficial está en AdminPanel/web)
+/web/
+
+# Archivos del sistema operativo y editores
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

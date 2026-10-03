@@ -562,13 +562,16 @@ document.addEventListener("DOMContentLoaded", () => {
   // --- 5. Monitor de Logs en Tiempo Real (/api/logs) ---
   async function loadLogs() {
     const lines = document.getElementById("select-log-lines").value;
-    const data = await apiGet(`/api/logs?lines=${lines}`);
+    const hideSpam = document.getElementById("toggle-hide-spam").checked ? 1 : 0;
+    const data = await apiGet(`/api/logs?lines=${lines}&hide_spam=${hideSpam}`);
     if (!data || !data.logs) return;
 
     const terminal = document.getElementById("logs-content");
     const terminalWindow = document.getElementById("logs-terminal-window");
 
     terminal.textContent = data.logs.join("");
+    document.getElementById("logs-hidden-count").textContent =
+      data.hidden_spam_lines ? `${data.hidden_spam_lines} líneas de spam ocultas` : "";
 
     if (appState.autoScrollLogs) {
       terminalWindow.scrollTop = terminalWindow.scrollHeight;
@@ -637,6 +640,10 @@ document.addEventListener("DOMContentLoaded", () => {
     loadLogs();
   });
 
+  document.getElementById("toggle-hide-spam").addEventListener("change", () => {
+    loadLogs();
+  });
+
   document.getElementById("btn-autoscroll-toggle").addEventListener("click", (ev) => {
     appState.autoScrollLogs = !appState.autoScrollLogs;
     ev.target.textContent = `Auto-Scroll: ${appState.autoScrollLogs ? "ON" : "OFF"}`;
@@ -644,35 +651,48 @@ document.addEventListener("DOMContentLoaded", () => {
   });
 
   // --- 4.5. Pilotos en Vivo y Moderación (/api/players) ---
+  function renderActivePlayersMessage(tbody, message, isError = false) {
+    tbody.innerHTML = `
+      <tr>
+        <td colspan="7" class="text-center" style="padding: 2.5rem 1rem; color: ${isError ? "var(--accent-red)" : "var(--text-muted)"};">
+          ${escapeHtml(message)}
+        </td>
+      </tr>
+    `;
+  }
+
   async function loadPlayersData() {
     const data = await apiGet("/api/players");
-    if (!data) return;
+    const activeTbody = document.getElementById("active-players-tbody");
+    if (!data) {
+      if (activeTbody) renderActivePlayersMessage(activeTbody, "⚠️ No se pudo consultar /api/players. Se reintentará automáticamente.", true);
+      return;
+    }
 
     // Contador en navbar
     const counter = document.getElementById("active-players-counter");
     if (counter) counter.textContent = data.total_active || 0;
 
     const countTag = document.getElementById("live-drivers-count-tag");
-    if (countTag) countTag.textContent = `${data.total_active || 0} Pilotos en Línea`;
+    if (countTag) {
+      const sessionName = data.session && data.session.name ? ` · ${data.session.name}` : "";
+      countTag.textContent = `${data.total_active || 0} Pilotos en Línea${sessionName}`;
+    }
 
     // 1. Pilotos Activos en Vivo
-    const activeTbody = document.getElementById("active-players-tbody");
     if (activeTbody) {
       const active = data.active_players || [];
-      if (active.length === 0) {
-        activeTbody.innerHTML = `
-          <tr>
-            <td colspan="7" class="text-center" style="padding: 2.5rem 1rem; color: var(--text-muted);">
-              🏁 No hay pilotos conectados en pista en este momento (esperando conexiones en el lobby).
-            </td>
-          </tr>
-        `;
+      if (data.live_error) {
+        renderActivePlayersMessage(activeTbody, `⚠️ ${data.live_error}`, true);
+      } else if (!data.server_running) {
+        renderActivePlayersMessage(activeTbody, "⏹️ El accServer gestionado por el panel está detenido. Inícialo para ver pilotos en vivo.");
+      } else if (active.length === 0) {
+        renderActivePlayersMessage(activeTbody, "🏁 No hay pilotos conectados en este momento (esperando conexiones en el lobby).");
       } else {
         activeTbody.innerHTML = active.map(p => {
-          const pingClass = p.ping_ms < 60 ? "good" : (p.ping_ms < 140 ? "med" : "bad");
           const adminBadge = p.is_admin ? `<span class="badge-admin">👑 ADMIN</span>` : "";
           const bannedBadge = p.is_banned ? `<span class="badge-banned">🚫 BANEADO</span>` : "";
-          const carNum = p.race_number !== null ? p.race_number : (p.car_id || "—");
+          const carNum = p.race_number ?? p.car_id ?? "—";
           const steamProfile = steamProfileUrl(p.player_id);
           const driverPayload = encodePayload(p);
 
@@ -685,7 +705,7 @@ document.addEventListener("DOMContentLoaded", () => {
               </td>
               <td><span style="color: var(--accent-cyan); font-weight: 500;">${escapeHtml(p.car_model_name)}</span></td>
               <td><a href="${steamProfile}" target="_blank" rel="noopener noreferrer" class="steam-link">${escapeHtml(p.player_id)}</a></td>
-              <td class="text-center"><span class="ping-pill ${pingClass}">${escapeHtml(p.ping_ms)} ms</span></td>
+              <td class="text-center"><code title="connId / carId según server.log">${escapeHtml(p.conn_id)} / ${escapeHtml(p.car_id)}</code></td>
               <td class="text-center"><span style="color: var(--accent-green); font-weight: 600;">● En Pista</span></td>
               <td class="text-center">
                 <button class="btn btn-sm btn-secondary" data-action="open-modal" data-payload="${driverPayload}">

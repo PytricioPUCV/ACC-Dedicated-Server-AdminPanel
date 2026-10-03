@@ -30,6 +30,8 @@ results/*
 log/
 log/*
 *.log
+# Logs reales anonimizados usados como fixtures de tests
+!AdminPanel/tests/fixtures/*.log
 
 # Artefactos de compilación de PyInstaller
 build/

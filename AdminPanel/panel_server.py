@@ -1,3 +1,4 @@
+import codecs
 import ctypes
 import hmac
 import json
@@ -12,10 +13,11 @@ import tempfile
 import threading
 import time
 import webbrowser
-from collections import deque
 from datetime import datetime
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 from urllib.parse import urlparse, parse_qs, unquote
+
+import acc_log
 
 # Asegurar codificación utf-8 en la consola de Windows para evitar errores de charmap cp1252
 if sys.stdout:
@@ -149,6 +151,7 @@ MAX_REQUEST_BYTES = 1_000_000
 MAX_LOG_LINES = 1_000
 MAX_RESULT_FILE_BYTES = 5_000_000
 PANEL_TOKEN = None
+LIVE_LOG = acc_log.LiveLogTracker()
 
 # Diccionario oficial de modelos de coche de ACC (ServerAdminHandbook Apéndice IX.3)
 CAR_MODELS = {
@@ -283,27 +286,49 @@ TRACK_NAME_MAP = {
 }
 
 VALID_TRACK_FILES = {f"{track_id}.json" for track_id in TRACK_NAME_MAP}
+CATALOG_TRACK_FILES = [f"{track_id}.json" for dlc in DLC_CATEGORIES.values() for track_id in dlc["tracks"]]
 VALID_TRACK_CODES = set(TRACK_NAME_MAP)
 PLAYER_ID_RE = re.compile(r"^S\d{5,25}$")
 
 # --- Helpers de Codificación y Archivos ---
-def read_json_safe(filepath, default=None):
-    if not os.path.exists(filepath):
-        return default
-    encodings = ["utf-16", "utf-16-le", "utf-8", "latin-1"]
-    for enc in encodings:
+def decode_json_bytes(raw):
+    """Decodifica JSON de ACC: UTF-16 con BOM (cfg), UTF-16 LE sin BOM (results), UTF-8 con o sin BOM."""
+    if raw.startswith(codecs.BOM_UTF16_LE) or raw.startswith(codecs.BOM_UTF16_BE):
+        candidates = ["utf-16"]
+    elif raw.startswith(codecs.BOM_UTF8):
+        candidates = ["utf-8-sig"]
+    elif len(raw) >= 2 and raw[1:2] == b"\x00" and raw[0:1] != b"\x00":
+        candidates = ["utf-16-le"]
+    elif len(raw) >= 2 and raw[0:1] == b"\x00":
+        candidates = ["utf-16-be"]
+    else:
+        candidates = ["utf-8", "cp1252"]
+    for encoding in candidates:
         try:
-            with open(filepath, "r", encoding=enc) as f:
-                return json.load(f)
-        except Exception:
+            return json.loads(raw.decode(encoding))
+        except (UnicodeDecodeError, json.JSONDecodeError):
             continue
-    return default
+    raise ValueError("JSON con codificación o formato no reconocido")
+
+
+def read_json_safe(filepath, default=None):
+    try:
+        with open(filepath, "rb") as f:
+            return decode_json_bytes(f.read())
+    except (OSError, ValueError):
+        return default
+
+def encode_json(data, encoding):
+    text = json.dumps(data, ensure_ascii=False, indent=2)
+    if encoding == "utf-16-le-bom":
+        return codecs.BOM_UTF16_LE + text.encode("utf-16-le")
+    return text.encode(encoding)
 
 def atomic_write_json(filepath, data, encoding):
     """Escribe JSON de forma atómica y conserva el último archivo válido como .bak."""
     directory = os.path.dirname(filepath)
     os.makedirs(directory, exist_ok=True)
-    payload = json.dumps(data, ensure_ascii=False, indent=2).encode(encoding)
+    payload = encode_json(data, encoding)
     fd, tmp_path = tempfile.mkstemp(prefix=f".{os.path.basename(filepath)}.", suffix=".tmp", dir=directory)
     try:
         with os.fdopen(fd, "wb") as f:
@@ -321,8 +346,8 @@ def atomic_write_json(filepath, data, encoding):
         raise
 
 def write_json_utf16(filepath, data):
-    """Guarda JSON con codificación UTF-16 LE y BOM (estrictamente requerido por ACC para settings/configuration/assistRules)"""
-    atomic_write_json(filepath, data, "utf-16")
+    """Guarda JSON en UTF-16 LE con BOM: el handbook de ACC exige este formato para todo cfg/*.json."""
+    atomic_write_json(filepath, data, "utf-16-le-bom")
 
 def get_rotation_config():
     default_config = {
@@ -383,7 +408,7 @@ app_state = {
 }
 
 def write_json_utf8(filepath, data):
-    """Guarda JSON con codificación UTF-8 estándar (para event.json y tracks_pool)"""
+    """Guarda JSON en UTF-8 (archivos propios del panel: tracks_pool, banlist, rotación)."""
     atomic_write_json(filepath, data, "utf-8")
 
 def get_banlist():
@@ -552,7 +577,6 @@ def validate_entrylist(entrylist):
     return entrylist
 
 def parse_active_players():
-    active = {}
     banlist = get_banlist()
     banned_ids = {b.get("playerId") for b in banlist}
     entrylist = get_entrylist()
@@ -563,52 +587,18 @@ def parse_active_players():
                 if d.get("playerID"):
                     admin_ids.add(d.get("playerID"))
 
-    # 1. Parsear server.log si accServer está corriendo
-    if os.path.exists(LOG_FILE) and is_acc_running():
+    # 1. Seguir server.log de forma incremental mientras el accServer gestionado esté corriendo
+    server_running = is_acc_running()
+    live = {"players": [], "clients_online": None, "session": {"name": None, "phase": None}}
+    live_error = None
+    if server_running:
         try:
-            with open(LOG_FILE, "r", encoding="utf-8", errors="replace") as f:
-                lines = deque(f, maxlen=800)
-            for line in lines:
-                # Detectar connId y playerID
-                if "has playerID" in line and "Client" in line:
-                    m = re.search(r"Client\s+(\d+)\s+has\s+playerID\s+(S\w+)\s+name\s+(.*)", line)
-                    if m:
-                        cid, pid, name = m.group(1), m.group(2), m.group(3).strip()
-                        active[cid] = {
-                            "conn_id": int(cid),
-                            "player_id": pid,
-                            "driver_name": name,
-                            "car_id": None,
-                            "race_number": None,
-                            "car_model_id": None,
-                            "car_model_name": "GT3",
-                            "ping_ms": 28,
-                            "is_connected": True
-                        }
-                # Asignación de coche
-                if "assigned to connection" in line:
-                    m = re.search(r"car\s+(\d+)\s+\(raceNumber\s+(\d+)\)\s+assigned\s+to\s+connection\s+(\d+)", line)
-                    if m:
-                        car_id, r_num, cid = m.group(1), m.group(2), m.group(3)
-                        if cid in active:
-                            active[cid]["car_id"] = int(car_id)
-                            active[cid]["race_number"] = int(r_num)
-                # Latencia / ping
-                if "lastUdpPaketReceived for connId" in line:
-                    m = re.search(r"for\s+connId\s+(\d+):\s+(\d+)\s+ms", line)
-                    if m:
-                        cid, ping = m.group(1), m.group(2)
-                        if cid in active:
-                            active[cid]["ping_ms"] = min(int(ping), 999)
-                # Desconexión
-                if "closed the connection" in line or "Removing dead connection" in line or "disco to connection" in line:
-                    m = re.search(r"(?:Client|connection)\s+(\d+)", line)
-                    if m:
-                        cid = m.group(1)
-                        if cid in active:
-                            del active[cid]
-        except Exception as e:
-            print(f"[!] Error parsing server.log for players: {e}")
+            live = LIVE_LOG.poll(LOG_FILE)
+        except OSError as error:
+            live_error = f"No fue posible leer server.log: {error.strerror or error}"
+            print(f"[!] {live_error}")
+    else:
+        LIVE_LOG.reset()
 
     # 2. Extraer pilotos recientes de results/*.json
     recent = []
@@ -654,18 +644,24 @@ def parse_active_players():
                 })
 
     active_list = []
-    for cid, p in active.items():
+    for p in live["players"]:
         pid = p["player_id"]
+        model_id = p.get("car_model_id")
+        p["car_model_name"] = CAR_MODELS.get(model_id, f"Car #{model_id}") if model_id is not None else "—"
+        p["ping_ms"] = None  # server.log no informa latencia
+        p["is_connected"] = True
         p["is_admin"] = pid in admin_ids
         p["is_banned"] = pid in banned_ids
-        if p.get("car_model_id") is not None:
-            p["car_model_name"] = CAR_MODELS.get(p["car_model_id"], "GT3")
         active_list.append(p)
 
     return {
         "active_players": active_list,
         "recent_players": recent,
         "total_active": len(active_list),
+        "server_running": server_running,
+        "clients_online": live["clients_online"],
+        "session": live["session"],
+        "live_error": live_error,
         "banlist": banlist,
         "entrylist": entrylist
     }
@@ -758,6 +754,7 @@ def kill_acc_server():
         subprocess.run(["taskkill", "/F", "/PID", str(pid), "/T"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         time.sleep(2.5)
         clear_managed_pid_file()
+        LIVE_LOG.reset()
         with state_lock:
             app_state["server_process_pid"] = None
             app_state["server_start_time"] = 0
@@ -782,9 +779,10 @@ def start_acc_server(track_file=None):
         if not isinstance(template, dict) or template.get("track") not in VALID_TRACK_CODES:
             raise RuntimeError("La plantilla de pista no contiene un evento ACC válido.")
 
-        write_json_utf8(os.path.join(CFG_DIR, "event.json"), template)
+        write_json_utf16(os.path.join(CFG_DIR, "event.json"), template)
         print(f"[+] Pista aplicada desde la plantilla: {track_file}")
         print(f"[+] Lanzando accServer.exe en {SERVER_DIR}...")
+        LIVE_LOG.skip_to_end(LOG_FILE)
         proc = subprocess.Popen([EXE_PATH], cwd=SERVER_DIR)
         atomic_write_json(PID_FILE, {"pid": proc.pid, "started_at": time.time()}, "utf-8")
 
@@ -795,6 +793,65 @@ def start_acc_server(track_file=None):
             app_state["server_start_time"] = time.time()
             app_state["status_message"] = f"Servidor en línea en pista: {track_file}"
         return proc
+
+def next_track_in_rotation(rotation, current_track_file):
+    """Pista siguiente a la actual; si la actual no está en la rotación, la siguiente según el catálogo."""
+    if not rotation:
+        raise ValueError("La rotación no contiene pistas.")
+    if current_track_file in rotation:
+        return rotation[(rotation.index(current_track_file) + 1) % len(rotation)]
+    if current_track_file in CATALOG_TRACK_FILES:
+        start = CATALOG_TRACK_FILES.index(current_track_file)
+        for offset in range(1, len(CATALOG_TRACK_FILES) + 1):
+            candidate = CATALOG_TRACK_FILES[(start + offset) % len(CATALOG_TRACK_FILES)]
+            if candidate in rotation:
+                return candidate
+    return rotation[0]
+
+
+def parse_result_file(filepath):
+    """Resumen de un results/*.json de ACC (UTF-16 LE sin BOM) o None si no es válido."""
+    if os.path.getsize(filepath) > MAX_RESULT_FILE_BYTES:
+        return None
+    data = read_json_safe(filepath)
+    if not isinstance(data, dict):
+        return None
+    session_result = data.get("sessionResult")
+    lines = session_result.get("leaderBoardLines") if isinstance(session_result, dict) else None
+    lines = [line for line in lines if isinstance(line, dict)] if isinstance(lines, list) else []
+    session_index = data.get("sessionIndex")
+    winner = None
+    if lines:
+        driver = lines[0].get("currentDriver") or {}
+        winner = f"{driver.get('firstName', '')} {driver.get('lastName', '')}".strip() or None
+    return {
+        "filename": os.path.basename(filepath),
+        "session_type": str(data.get("sessionType", "")).upper(),
+        "track": data.get("trackName"),
+        "session_index": session_index if isinstance(session_index, int) and not isinstance(session_index, bool) else None,
+        "driver_count": len(lines),
+        "max_laps": max((((line.get("timing") or {}).get("lapCount") or 0) for line in lines), default=0),
+        "winner": winner,
+    }
+
+
+def is_final_race_of_weekend(result, event_cfg):
+    """True si el resultado es la última sesión R del evento activo (no una práctica, clasificación o R1 de 2)."""
+    if not result or result["session_type"] != "R":
+        return False
+    event_cfg = event_cfg if isinstance(event_cfg, dict) else {}
+    event_track = event_cfg.get("track")
+    if event_track and result["track"] and result["track"] != event_track:
+        return False
+    sessions = event_cfg.get("sessions")
+    race_indexes = [
+        index for index, session in enumerate(sessions if isinstance(sessions, list) else [])
+        if isinstance(session, dict) and session.get("sessionType") == "R"
+    ]
+    if not race_indexes or result["session_index"] is None:
+        return True
+    return result["session_index"] >= race_indexes[-1]
+
 
 def get_latest_race_result():
     if not os.path.exists(RESULTS_DIR):
@@ -811,6 +868,59 @@ def get_latest_race_result():
         return None, 0
     return max(race_files, key=lambda x: x[1])
 
+
+def detect_finished_race():
+    """Una pasada del detector: devuelve (archivo, epoch) si hay que rotar, o None.
+
+    El mtime visto siempre avanza, aunque la rotación esté en pausa o el servidor detenido:
+    así una carrera antigua nunca dispara una rotación al reactivar la auto-rotación o al arrancar.
+    """
+    latest_file, mtime = get_latest_race_result()
+    with state_lock:
+        if not latest_file or mtime <= app_state["last_race_mtime"]:
+            return None
+        app_state["last_race_mtime"] = mtime
+        auto_rot = app_state["auto_rotation"]
+        epoch = app_state["rotation_epoch"]
+        started_at = app_state["server_start_time"]
+
+    # Sólo cuentan carreras escritas por la ejecución actual del accServer gestionado.
+    if not auto_rot or mtime <= started_at or not is_acc_running():
+        return None
+    try:
+        result = parse_result_file(latest_file)
+    except OSError:
+        result = None
+    event_cfg = read_json_safe(os.path.join(CFG_DIR, "event.json"), {})
+    if not is_final_race_of_weekend(result, event_cfg):
+        with state_lock:
+            app_state["status_message"] = (
+                f"Resultado {os.path.basename(latest_file)} registrado; no es la carrera final del evento actual."
+            )
+        return None
+    return latest_file, epoch
+
+
+def rotate_after_race(epoch):
+    with lifecycle_lock:
+        with state_lock:
+            still_valid = app_state["auto_rotation"] and app_state["rotation_epoch"] == epoch
+            current_track = app_state["current_track_file"]
+            rotation = list(TRACK_ROTATION)
+        if not still_valid or not is_acc_running():
+            return
+        next_track = next_track_in_rotation(rotation, current_track)
+        print(f"[*] Rotando a la siguiente pista: {next_track}")
+        if not kill_acc_server():
+            return
+        try:
+            start_acc_server(next_track)
+        except (RuntimeError, OSError, ValidationError) as error:
+            print(f"[!] No se pudo iniciar {next_track} tras la rotación: {error}")
+            with state_lock:
+                app_state["status_message"] = f"Rotación fallida al iniciar {next_track}: {error}"
+
+
 # --- 5. Hilo de Auto-Rotación de Circuitos ---
 def rotation_worker():
     _, last_mtime = get_latest_race_result()
@@ -821,38 +931,16 @@ def rotation_worker():
     while True:
         try:
             time.sleep(3)
+            finished = detect_finished_race()
+            if not finished:
+                continue
+            latest_file, epoch = finished
             with state_lock:
-                auto_rot = app_state["auto_rotation"]
-                prev_mtime = app_state["last_race_mtime"]
-                epoch = app_state["rotation_epoch"]
-
-            latest_file, mtime = get_latest_race_result()
-
-            if auto_rot and is_acc_running() and latest_file and mtime > prev_mtime:
-                with state_lock:
-                    app_state["last_race_mtime"] = mtime
-                    app_state["status_message"] = f"Carrera terminada: {os.path.basename(latest_file)}. Esperando 12s para podio..."
-
-                print(f"\n[🏁] ¡Carrera terminada detectada!: {os.path.basename(latest_file)}")
-                print("[*] Esperando 12 segundos de cortesía para pantalla de podio...")
-                time.sleep(12)
-
-                with lifecycle_lock:
-                    with state_lock:
-                        still_valid = (
-                            app_state["auto_rotation"]
-                            and app_state["rotation_epoch"] == epoch
-                            and is_acc_running()
-                        )
-                    if not still_valid:
-                        continue
-                    print("[*] Rotando a la siguiente pista...")
-                    if not kill_acc_server():
-                        continue
-                    with state_lock:
-                        app_state["current_track_idx"] = (app_state["current_track_idx"] + 1) % len(TRACK_ROTATION)
-                        next_track = TRACK_ROTATION[app_state["current_track_idx"]]
-                    start_acc_server(next_track)
+                app_state["status_message"] = f"Carrera terminada: {os.path.basename(latest_file)}. Esperando 12s para podio..."
+            print(f"\n[🏁] ¡Carrera terminada detectada!: {os.path.basename(latest_file)}")
+            print("[*] Esperando 12 segundos de cortesía para pantalla de podio...")
+            time.sleep(12)
+            rotate_after_race(epoch)
 
         except Exception as e:
             print(f"[!] Excepción en rotation_worker: {e}")
@@ -1021,8 +1109,7 @@ class AdminPanelHandler(BaseHTTPRequestHandler):
                     if is_acc_running() and not kill_acc_server():
                         raise RuntimeError("No fue posible detener el accServer gestionado.")
                     with state_lock:
-                        app_state["current_track_idx"] = (app_state["current_track_idx"] + 1) % len(TRACK_ROTATION)
-                        next_track = TRACK_ROTATION[app_state["current_track_idx"]]
+                        next_track = next_track_in_rotation(list(TRACK_ROTATION), app_state["current_track_file"])
                     start_acc_server(next_track)
                 self.send_json({"success": True, "track": next_track, "message": f"Saltado a {next_track}"})
             except (RuntimeError, OSError, ValidationError) as error:
@@ -1340,7 +1427,7 @@ class AdminPanelHandler(BaseHTTPRequestHandler):
                     track_file = f"{event['track']}.json"
                     # El editor cambia la plantilla de la pista actual y el evento activo: no se perderá al reiniciar.
                     write_json_utf8(os.path.join(POOLS_DIR, track_file), event)
-                    write_json_utf8(os.path.join(CFG_DIR, "event.json"), event)
+                    write_json_utf16(os.path.join(CFG_DIR, "event.json"), event)
                     sync_state_from_event()
 
             self.send_json({"success": True, "message": "Configuración validada y guardada. Los cambios de evento se aplican en el próximo reinicio."})
@@ -1440,18 +1527,19 @@ class AdminPanelHandler(BaseHTTPRequestHandler):
         except Exception:
             lines_count = 100
         lines_count = max(1, min(lines_count, MAX_LOG_LINES))
+        hide_spam = query.get("hide_spam", ["0"])[0] == "1"
 
         logs = []
+        hidden = 0
         if os.path.exists(LOG_FILE):
             try:
-                with open(LOG_FILE, "r", encoding="utf-8", errors="replace") as f:
-                    logs = list(deque(f, maxlen=lines_count))
+                logs, hidden = acc_log.tail_log_lines(LOG_FILE, lines_count, hide_spam=hide_spam)
             except OSError:
                 logs = ["No fue posible leer server.log."]
         else:
             logs = ["El archivo server.log aún no se ha generado."]
 
-        self.send_json({"logs": logs})
+        self.send_json({"logs": logs, "hidden_spam_lines": hidden})
 
     # --- Servir Archivos Estáticos del Frontend ---
     def handle_static_files(self, path):

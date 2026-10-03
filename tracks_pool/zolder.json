@@ -4,7 +4,7 @@
   "sessionOverTimeSeconds": 120,
   "ambientTemp": 22,
   "cloudLevel": 0.2,
-  "rain": 0.0,
+  "rain": 0,
   "weatherRandomness": 1,
   "sessions": [
     {

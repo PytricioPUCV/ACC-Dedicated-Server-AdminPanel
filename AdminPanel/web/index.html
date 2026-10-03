@@ -292,7 +292,7 @@
                   <th>Piloto</th>
                   <th>Modelo de Coche</th>
                   <th>Steam ID</th>
-                  <th class="text-center">Ping</th>
+                  <th class="text-center">Conexión / Coche</th>
                   <th class="text-center">Estado</th>
                   <th class="text-center">Control de Carrera</th>
                 </tr>
@@ -608,6 +608,10 @@
                 <option value="200">200</option>
                 <option value="500">500</option>
               </select>
+            </label>
+            <span class="logs-hidden-count" id="logs-hidden-count"></span>
+            <label class="checkbox-label" title="Oculta las líneas '==ERR: onCarUpdate ... timestamp is N ms in the future'">
+              <input type="checkbox" id="toggle-hide-spam" checked> Ocultar spam onCarUpdate
             </label>
             <button id="btn-refresh-logs" class="btn btn-sm btn-secondary">Refrescar</button>
             <button id="btn-autoscroll-toggle" class="btn btn-sm btn-secondary active">Auto-Scroll: ON</button>

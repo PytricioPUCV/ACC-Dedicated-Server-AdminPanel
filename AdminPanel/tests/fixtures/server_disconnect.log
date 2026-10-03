@@ -1,0 +1,18 @@
+51805: ==ERR: TCP socket error detected 10053 
+
+51805: Client 0 closed the connection (10053)
+51820: Removing dead connection 0  (last lastUdpPaketReceived 2017)
+51820: Alive connections: 0
+51820: car 1001 has no driving connection anymore, will remove it
+51820: Updated lobby with 0 drivers
+51820: Alive cars: 0
+51820: 0 client(s) online
+51820: No drivers around, resetting session
+51820: Resetting race weekend
+51820: Resetting weekend to friday night
+51820: Reset time to friday night: 50418 -> 0
+51820: Reset time to first session: 0 -> 50400
+51820: SessionManager::randomizeGreenFlagTriggers: s:0.991555 e:0.999999 r:0.998384
+51820: Detected sessionPhase <session> -> <waiting for drivers> (Practice)
+51820: Sent session update to lobby
+60407: Udp message count (0 clients): 19=1, 22=15, 30=262, 

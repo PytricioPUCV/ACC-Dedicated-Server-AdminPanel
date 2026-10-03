@@ -1,0 +1,81 @@
+0: Server starting with version 256
+0: Starting server Servidor de Pruebas
+0: 	EntryList entry: id 0, isAdmin 1, overrideDI 0
+0: Using entry list with 1 drivers
+0: maxCarSlots 24 exceeds the allowed slots by Rating requirement (10). Add Track Medal and Safety Rating Requirements to gain up to 30 slots (3 TM + 70 SA)
+0: Translated realtime interval hzToMiliseconds(18)=54
+
+0: SessionManager::randomizeGreenFlagTriggers: s:0.890000 e:0.950000 r:0.896850
+0: Track monza was set and updated
+0: Event changed
+0: ==ERR: Ignoring special assist rules for public Multiplayer
+0: SessionManager::randomizeGreenFlagTriggers: s:0.890000 e:0.950000 r:0.935886
+0: Significant change detected, updating lobby (1|1)
+0: maxCarSlots 24 exceeds the allowed slots by Rating requirement (10). Add Track Medal and Safety Rating Requirements to gain up to 30 slots (3 TM + 70 SA)
+0: Resetting weekend to friday night
+0: Reset time to friday night: 0 -> 0
+0: Reset time to first session: 0 -> 50400
+0: SessionManager::randomizeGreenFlagTriggers: s:0.890000 e:0.950000 r:0.939956
+0: Listening to TCP 9232 | UDP 9231
+104: Trying to connect to lobby (0 times, interval 10000 s)
+104: Session changed: Practice -> Practice 0
+104: Detected sessionPhase <waiting for drivers> -> <waiting for drivers> (Practice)
+1316: RegisterToLobby succeeded
+1332: Sent lobby registration request for monza
+1576: TCPQueue now: 4
+1576: New TCP incoming pakSizeMax, 0 => 2
+1576: Updated lobby with 0 drivers
+31188: Replied to network discovery request
+33766: New connection received 376
+33766: 1 client(s) online
+33766: TCPQueue now: 430
+33766: New TCP incoming pakSizeMax, 0 => 428
+33766: Located entryListId 0 for connection 0 S76561190000000001
+33766: New connection request: id 0 Piloto Prueba S76561190000000001 on car model 34
+33766: Creating new car connection: carId 1001, carModel 34, raceNumber #97
+33766: Special Rules for carid 1001: 
+	max_total_driving_time is -1 (from -1), pitCount 0
+33766: startingTime is not set?
+33766: Starting stint for car 1001 driver 0 at 33766.305300
+33766: Updated lobby with 1 drivers
+33766: Assigning gridNumber 1 to new carId 1001
+33766: Sent handshake response for car 1001 connection 0 with 1286 bytes
+33766: 1 Driver(s) detected, starting session
+33766: SessionManager::randomizeGreenFlagTriggers: s:0.991555 e:0.999999 r:0.991566
+33766: Detected sessionPhase <waiting for drivers> -> <pre session> (Practice)
+33766: Sent session update to lobby
+33766: Updated leaderboard for 1 clients (Practice-<pre session> 10 min)
+35472: Associated: connId 0, now 35472
+35534: Reset time offset for connection 0, new offset 35463, diff 1697
+35779: Receives driver stint reset for car 1001
+35779: Ending stint: new total time for car 1001 driver 0 is 1899.194700
+35779: List of Stints for car 1001 driver 0
+35779: Stint 1 car 1001 driver 0 started 33766.305300 ended 35665.500000
+35810: Receives driver stint reset for car 1001
+35810: startingTime is not set?
+35825: Updated 0 clients with new carSystem for car 1001 (470810624l)
+35840: Updated 0 clients with new carSystem for car 1001 (470810640l)
+36132: ==ERR: onCarUpdate (1001): timestamp is 5 ms in the future: 36138 (now: 36132 offset: 35463)
+36239: ==ERR: onCarUpdate (1001): timestamp is 5 ms in the future: 36245 (now: 36239 offset: 35463)
+36771: Detected sessionPhase <session> -> <session> (Practice)
+36771: Sent session update to lobby
+40181: ==ERR: onCarUpdate (1001): timestamp is 6 ms in the future: 40188 (now: 40181 offset: 35463)
+40288: ==ERR: onCarUpdate (1001): timestamp is 6 ms in the future: 40295 (now: 40288 offset: 35463)
+41801: ==ERR: onCarUpdate (1001): timestamp is 6 ms in the future: 41808 (now: 41801 offset: 35463)
+41909: ==ERR: onCarUpdate (1001): timestamp is 5 ms in the future: 41915 (now: 41909 offset: 35463)
+42287: ==ERR: onCarUpdate (1001): timestamp is 5 ms in the future: 42293 (now: 42287 offset: 35463)
+42557: ==ERR: onCarUpdate (1001): timestamp is 5 ms in the future: 42563 (now: 42557 offset: 35463)
+43044: ==ERR: onCarUpdate (1001): timestamp is 5 ms in the future: 43050 (now: 43044 offset: 35463)
+43152: ==ERR: onCarUpdate (1001): timestamp is 5 ms in the future: 43158 (now: 43152 offset: 35463)
+43259: ==ERR: onCarUpdate (1001): timestamp is 5 ms in the future: 43265 (now: 43259 offset: 35463)
+43854: ==ERR: onCarUpdate (1001): timestamp is 5 ms in the future: 43860 (now: 43854 offset: 35463)
+43962: ==ERR: onCarUpdate (1001): timestamp is 5 ms in the future: 43968 (now: 43962 offset: 35463)
+44069: ==ERR: onCarUpdate (1001): timestamp is 5 ms in the future: 44075 (now: 44069 offset: 35463)
+44176: ==ERR: onCarUpdate (1001): timestamp is 6 ms in the future: 44183 (now: 44176 offset: 35463)
+44772: ==ERR: onCarUpdate (1001): timestamp is 6 ms in the future: 44779 (now: 44772 offset: 35464)
+44879: ==ERR: onCarUpdate (1001): timestamp is 6 ms in the future: 44886 (now: 44879 offset: 35464)
+45583: ==ERR: onCarUpdate (1001): timestamp is 5 ms in the future: 45589 (now: 45583 offset: 35464)
+45689: ==ERR: onCarUpdate (1001): timestamp is 5 ms in the future: 45695 (now: 45689 offset: 35463)
+47093: ==ERR: onCarUpdate (1001): timestamp is 5 ms in the future: 47099 (now: 47093 offset: 35462)
+49361: ==ERR: onCarUpdate (1001): timestamp is 6 ms in the future: 49368 (now: 49361 offset: 35463)
+49469: ==ERR: onCarUpdate (1001): timestamp is 5 ms in the future: 49475 (now: 49469 offset: 35463)

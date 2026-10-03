@@ -1,0 +1,2 @@
+# Las fixtures conservan los finales de línea CRLF reales de accServer
+AdminPanel/tests/fixtures/*.log -text

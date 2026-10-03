@@ -1,10 +1,12 @@
 /**
  * ASSETTO CORSA COMPETIZIONE — RACE CONTROL (frontend)
  * Estado reactivo, sondeo de la API REST e interacciones del panel. Vanilla JS, sin dependencias.
+ * Los textos visibles salen de i18n.js (español por defecto, inglés opcional).
  */
 
 document.addEventListener("DOMContentLoaded", () => {
   const $ = id => document.getElementById(id);
+  const { t, translateServer: tr, dlcName, dlcDescription } = window.i18n;
 
   // --- Token de acceso: se toma de la URL una vez y se guarda en la sesión del navegador ---
   const url = new URL(window.location.href);
@@ -28,7 +30,8 @@ document.addEventListener("DOMContentLoaded", () => {
     configData: null,
     autoScrollLogs: true,
     rotationRequestPending: false,
-    activePlayers: 0
+    activePlayers: 0,
+    suppressFlashUntil: 0
   };
 
   // ==========================================================================
@@ -84,7 +87,7 @@ document.addEventListener("DOMContentLoaded", () => {
     return typeof value === "number" ? `${Math.round(value * 100)}%` : "—";
   }
 
-  // Actualiza un texto y lo destaca brevemente si cambió (sin animar la primera carga).
+  // Actualiza un texto y lo destaca brevemente si cambió (sin animar la primera carga ni un cambio de idioma).
   function setText(id, value) {
     const element = $(id);
     if (!element) return;
@@ -93,11 +96,18 @@ document.addEventListener("DOMContentLoaded", () => {
     const hadValue = element.dataset.loaded === "1";
     element.textContent = text;
     element.dataset.loaded = "1";
-    if (hadValue) {
+    if (hadValue && Date.now() > appState.suppressFlashUntil) {
       element.classList.remove("value-flash");
       void element.offsetWidth;
       element.classList.add("value-flash");
     }
+  }
+
+  // Texto con datos reales: i18n.applyStatic() deja de sobrescribirlo con el texto provisional.
+  function setLoadedText(id, value) {
+    const element = $(id);
+    element.textContent = String(value);
+    element.dataset.loaded = "1";
   }
 
   function emptyState(title, text = "", variant = "") {
@@ -148,22 +158,34 @@ document.addEventListener("DOMContentLoaded", () => {
     setTimeout(dismiss, type === "error" ? 7000 : 4500);
   }
 
+  // Toast con el mensaje del backend traducido al idioma activo.
+  function showResultToast(res, fallbackKey = "", successType = "success") {
+    const message = tr(res.message) || (fallbackKey ? t(fallbackKey) : "");
+    showToast(message, res.success ? successType : "error");
+  }
+
   // ==========================================================================
   // Cliente de la API con estado de conexión
   // ==========================================================================
   let connectionOk = true;
+  let connectionMessageKey = "";
 
-  function setConnection(ok, message = "") {
+  function setConnection(ok, messageKey = "") {
+    connectionOk = ok;
+    connectionMessageKey = messageKey;
+    renderConnection();
+  }
+
+  function renderConnection() {
     const banner = $("connection-banner");
-    $("panel-link").classList.toggle("lost", !ok);
-    $("panel-link-text").textContent = ok ? "Conectado" : "Sin conexión";
-    if (ok) {
+    $("panel-link").classList.toggle("lost", !connectionOk);
+    setLoadedText("panel-link-text", connectionOk ? t("conn.ok") : t("conn.lost"));
+    if (connectionOk) {
       banner.hidden = true;
     } else {
-      banner.textContent = message;
+      banner.textContent = t(connectionMessageKey);
       banner.hidden = false;
     }
-    connectionOk = ok;
   }
 
   async function apiRequest(endpoint, options = {}) {
@@ -173,11 +195,11 @@ document.addEventListener("DOMContentLoaded", () => {
     try {
       response = await fetch(endpoint, { ...options, headers, cache: "no-store" });
     } catch (error) {
-      setConnection(false, "Sin conexión con el panel. Comprueba que ACC_AdminPanel sigue abierto; reintentando…");
+      setConnection(false, "conn.offlineBanner");
       return { ok: false, status: 0, data: null };
     }
     if (response.status === 401) {
-      setConnection(false, "Acceso no autorizado: abre el panel con el enlace que se abre al iniciarlo (incluye el token).");
+      setConnection(false, "conn.unauthorized");
     } else if (!connectionOk) {
       setConnection(true);
     }
@@ -205,7 +227,7 @@ document.addEventListener("DOMContentLoaded", () => {
       if (result.data.success === undefined) result.data.success = result.ok;
       return result.data;
     }
-    return { success: false, message: result.status ? `Error HTTP ${result.status}` : "Sin conexión con el panel." };
+    return { success: false, message: result.status ? t("api.httpError", { status: result.status }) : t("api.noConnection") };
   }
 
   // Bloquea el botón mientras dura la acción: evita dobles clics y muestra un spinner.
@@ -247,12 +269,12 @@ document.addEventListener("DOMContentLoaded", () => {
     const lights = $("server-status-badge");
     const state = appState.isRunning ? "online" : (appState.unmanaged ? "unmanaged" : "offline");
     lights.className = `start-lights ${state}`;
-    $("server-status-text").textContent = { online: "ONLINE", unmanaged: "EXTERNO", offline: "OFFLINE" }[state];
-    $("server-status-sub").textContent = {
+    setLoadedText("server-status-text", t(`status.${state}`));
+    setLoadedText("server-status-sub", {
       online: `PID ${data.pid}`,
-      unmanaged: "accServer no gestionado",
-      offline: "accServer detenido"
-    }[state];
+      unmanaged: t("status.subUnmanaged"),
+      offline: t("status.subOffline")
+    }[state]);
     updateServerButtons();
 
     $("server-uptime-val").textContent = formatUptime(data.uptime_seconds);
@@ -260,28 +282,34 @@ document.addEventListener("DOMContentLoaded", () => {
     $("net-tcp-port").textContent = data.tcp_port ?? "—";
 
     const stateValue = $("kpi-server-state");
-    setText("kpi-server-state", appState.isRunning ? "ONLINE" : (appState.unmanaged ? "EXTERNO" : "OFFLINE"));
+    setText("kpi-server-state", t(`status.${state}`));
     stateValue.classList.toggle("is-online", appState.isRunning);
     stateValue.classList.toggle("is-offline", !appState.isRunning);
     setText("kpi-server-pid", data.pid ? `PID ${data.pid}` : "PID —");
-    setText("kpi-status-message", data.status_message || "En espera");
-    $("kpi-status-message").title = data.status_message || "";
+    const statusMessage = tr(data.status_message);
+    setText("kpi-status-message", statusMessage || t("status.waiting"));
+    $("kpi-status-message").title = statusMessage || "";
 
-    setText("kpi-track-name", data.track_display_name || data.track_name || "—");
-    $("kpi-track-name").title = data.track_display_name || "";
+    const trackName = tr(data.track_display_name || data.track_name);
+    setText("kpi-track-name", trackName || "—");
+    $("kpi-track-name").title = trackName || "";
     setText("kpi-track-file", data.current_track_file || "cfg/event.json");
     const weather = data.weather || {};
-    setText("kpi-track-weather", `Temp ${weather.ambient_temp ?? "—"}°C · Nubes ${percent(weather.cloud_level)} · Lluvia ${percent(weather.rain)}`);
+    setText("kpi-track-weather", t("kpi.weather", {
+      temp: weather.ambient_temp ?? "—",
+      clouds: percent(weather.cloud_level),
+      rain: percent(weather.rain)
+    }));
 
     const sessionsContainer = $("kpi-sessions-container");
     const sessions = Array.isArray(data.sessions) ? data.sessions : [];
     sessionsContainer.innerHTML = sessions.length
       ? sessions.map(s => `<span class="session-pill ${sessionClass(s.sessionType)}">${escapeHtml(s.sessionType)} · ${escapeHtml(s.sessionDurationMinutes)}′</span>`).join("")
-      : `<span class="kpi-sub-val">Sin sesiones en event.json</span>`;
-    setText("kpi-race-locked", data.is_race_locked === 1 ? "Bloqueado" : (data.is_race_locked === 0 ? "Abierto" : "—"));
+      : `<span class="kpi-sub-val">${escapeHtml(t("kpi.noSessions"))}</span>`;
+    setText("kpi-race-locked", data.is_race_locked === 1 ? t("opt.locked") : (data.is_race_locked === 0 ? t("opt.open") : "—"));
 
-    setText("kpi-max-slots", `${data.max_car_slots ?? "—"} SLOTS`);
-    setText("kpi-max-connections", `Max conexiones: ${data.max_connections ?? "—"}`);
+    setText("kpi-max-slots", t("kpi.slots", { n: data.max_car_slots ?? "—" }));
+    setText("kpi-max-connections", t("kpi.maxConnections", { n: data.max_connections ?? "—" }));
     setText("kpi-server-room-name", data.server_name || "ACC Dedicated Server");
     $("kpi-server-room-name").title = data.server_name || "";
 
@@ -291,7 +319,7 @@ document.addEventListener("DOMContentLoaded", () => {
   function renderAutoRotation(enabled) {
     $("auto-rotation-toggle").checked = enabled;
     const badge = $("auto-rotation-status-badge");
-    badge.textContent = enabled ? "ACTIVA" : "PAUSADA";
+    setLoadedText("auto-rotation-status-badge", enabled ? t("rotation.active") : t("rotation.paused"));
     badge.className = `toggle-status${enabled ? "" : " paused"}`;
   }
 
@@ -302,7 +330,7 @@ document.addEventListener("DOMContentLoaded", () => {
     const data = await apiGet("/api/tracks");
     if (!data) {
       if ($("categories-tracks-container").getAttribute("aria-busy")) {
-        $("categories-tracks-container").innerHTML = emptyState("No se pudo cargar el catálogo", "Se reintentará al volver a abrir la pestaña.", "error");
+        $("categories-tracks-container").innerHTML = emptyState(t("tracks.loadError"), t("tracks.loadErrorText"), "error");
       }
       return;
     }
@@ -326,75 +354,79 @@ document.addEventListener("DOMContentLoaded", () => {
     const select = $("select-direct-track");
     const previous = select.value;
     select.innerHTML = categories.map(cat => `
-      <optgroup label="${escapeHtml(cat.name)}">
-        ${cat.tracks.map(t => {
-          const selected = t.filename === (previous || data.current_track_file);
-          return `<option value="${escapeHtml(t.filename)}" ${selected ? "selected" : ""}>${escapeHtml(t.display_name)}${t.filename === data.current_track_file ? " · actual" : ""}</option>`;
+      <optgroup label="${escapeHtml(dlcName(cat))}">
+        ${cat.tracks.map(track => {
+          const selected = track.filename === (previous || data.current_track_file);
+          return `<option value="${escapeHtml(track.filename)}" ${selected ? "selected" : ""}>${escapeHtml(track.display_name)}${track.filename === data.current_track_file ? escapeHtml(t("tracks.currentSuffix")) : ""}</option>`;
         }).join("")}
       </optgroup>`).join("");
 
-    $("dlc-chips-container").innerHTML = categories.map(cat => `
+    $("dlc-chips-container").innerHTML = categories.map(cat => {
+      const name = dlcName(cat);
+      return `
       <div class="dlc-chip-card ${cat.is_active ? "active" : "inactive"}">
         <div class="dlc-chip-info">
-          <span class="dlc-chip-name" title="${escapeHtml(cat.name)}">${escapeHtml(cat.name)}</span>
+          <span class="dlc-chip-name" title="${escapeHtml(name)}">${escapeHtml(name)}</span>
           <div class="dlc-chip-meta">
             <span class="dlc-chip-count">${cat.active_tracks_count}/${cat.total_tracks}</span>
-            <span>en rotación</span>
+            <span>${escapeHtml(t("tracks.inRotationLower"))}</span>
           </div>
         </div>
         <label class="switch switch-sm">
-          <input type="checkbox" role="switch" ${cat.is_active ? "checked" : ""} data-action="toggle-dlc" data-dlc-id="${escapeHtml(cat.id)}" aria-label="Incluir ${escapeHtml(cat.name)} en la rotación">
+          <input type="checkbox" role="switch" ${cat.is_active ? "checked" : ""} data-action="toggle-dlc" data-dlc-id="${escapeHtml(cat.id)}" aria-label="${escapeHtml(t("tracks.includeAria", { name }))}">
           <span class="slider"></span>
         </label>
-      </div>`).join("");
+      </div>`;
+    }).join("");
     markLoaded("dlc-chips-container");
 
     $("categories-tracks-container").innerHTML = categories.map(cat => {
       const isBase = cat.id === "base";
-      const cards = cat.tracks.map(t => {
-        const isCurrent = t.filename === data.current_track_file || t.is_current;
+      const name = dlcName(cat);
+      const cards = cat.tracks.map(track => {
+        const isCurrent = track.filename === data.current_track_file || track.is_current;
         return `
-          <article class="track-pool-card ${isCurrent ? "active-server-track" : ""} ${t.in_rotation ? "" : "excluded-from-rotation"}">
+          <article class="track-pool-card ${isCurrent ? "active-server-track" : ""} ${track.in_rotation ? "" : "excluded-from-rotation"}">
             <div class="track-card-top">
               <div class="track-card-header-row">
-                <h5 class="track-card-title">${escapeHtml(t.display_name)}</h5>
-                ${isCurrent ? '<span class="track-badge-live">EN PISTA</span>' : ""}
+                <h5 class="track-card-title">${escapeHtml(track.display_name)}</h5>
+                ${isCurrent ? `<span class="track-badge-live">${escapeHtml(t("tracks.onTrack"))}</span>` : ""}
               </div>
-              <span class="track-card-code">${escapeHtml(t.filename)}</span>
+              <span class="track-card-code">${escapeHtml(track.filename)}</span>
             </div>
             <div class="track-weather-grid">
-              <div class="weather-metric"><span>Temp</span><strong>${escapeHtml(t.ambient_temp)}°C</strong></div>
-              <div class="weather-metric"><span>Lluvia</span><strong>${percent(t.rain)}</strong></div>
-              <div class="weather-metric"><span>Nubes</span><strong>${percent(t.cloud_level)}</strong></div>
-              <div class="weather-metric"><span>Overtime</span><strong>${escapeHtml(t.session_over_time_seconds ?? 120)} s</strong></div>
+              <div class="weather-metric"><span>${escapeHtml(t("tracks.temp"))}</span><strong>${escapeHtml(track.ambient_temp)}°C</strong></div>
+              <div class="weather-metric"><span>${escapeHtml(t("tracks.rain"))}</span><strong>${percent(track.rain)}</strong></div>
+              <div class="weather-metric"><span>${escapeHtml(t("tracks.clouds"))}</span><strong>${percent(track.cloud_level)}</strong></div>
+              <div class="weather-metric"><span>${escapeHtml(t("tracks.overtime"))}</span><strong>${escapeHtml(track.session_over_time_seconds ?? 120)} s</strong></div>
             </div>
             <div class="track-card-footer">
               <div class="track-toggle-inline">
                 <label class="switch switch-sm">
-                  <input type="checkbox" role="switch" ${t.in_rotation ? "checked" : ""} ${cat.is_active ? "" : "disabled"} data-action="toggle-track" data-track-file="${escapeHtml(t.filename)}" aria-label="Incluir ${escapeHtml(t.display_name)} en la rotación">
+                  <input type="checkbox" role="switch" ${track.in_rotation ? "checked" : ""} ${cat.is_active ? "" : "disabled"} data-action="toggle-track" data-track-file="${escapeHtml(track.filename)}" aria-label="${escapeHtml(t("tracks.includeAria", { name: track.display_name }))}">
                   <span class="slider"></span>
                 </label>
-                <span class="toggle-label">${t.in_rotation ? "En rotación" : "Excluido"}</span>
+                <span class="toggle-label">${escapeHtml(track.in_rotation ? t("tracks.inRotation") : t("tracks.excluded"))}</span>
               </div>
-              <button type="button" class="btn btn-sm ${isCurrent ? "btn-success" : "btn-secondary"}" data-action="select-track" data-track-file="${escapeHtml(t.filename)}" ${isCurrent ? 'aria-current="true"' : ""}>
-                ${isCurrent ? "Pista actual" : "Cargar pista"}
+              <button type="button" class="btn btn-sm ${isCurrent ? "btn-success" : "btn-secondary"}" data-action="select-track" data-track-file="${escapeHtml(track.filename)}" ${isCurrent ? 'aria-current="true"' : ""}>
+                ${escapeHtml(isCurrent ? t("tracks.current") : t("tracks.load"))}
               </button>
             </div>
           </article>`;
       }).join("");
 
       return `
-        <section class="dlc-category-section ${isBase ? "is-base" : "is-dlc"} ${cat.is_active ? "active" : "inactive"}" aria-label="${escapeHtml(cat.name)}">
+        <section class="dlc-category-section ${isBase ? "is-base" : "is-dlc"} ${cat.is_active ? "active" : "inactive"}" aria-label="${escapeHtml(name)}">
           <div class="dlc-category-header">
             <div class="dlc-category-title-group">
-              <h4 class="dlc-category-title">${escapeHtml(cat.name)}</h4>
-              <span class="dlc-badge ${isBase ? "base" : "dlc"}">${isBase ? "Juego base" : "DLC"}</span>
-              <span class="dlc-category-desc">${escapeHtml(cat.description)}</span>
+              <h4 class="dlc-category-title">${escapeHtml(name)}</h4>
+              <span class="dlc-badge ${isBase ? "base" : "dlc"}">${escapeHtml(isBase ? t("tracks.baseGame") : "DLC")}</span>
+              <span class="dlc-category-desc">${escapeHtml(dlcDescription(cat))}</span>
             </div>
             <div class="dlc-category-actions">
-              <span class="dlc-category-count-badge">${cat.active_tracks_count} de ${cat.total_tracks} en rotación</span>
+              <span class="dlc-category-count-badge">${escapeHtml(t("tracks.countOf", { active: cat.active_tracks_count, total: cat.total_tracks }))}</span>
               <label class="switch">
-                <input type="checkbox" role="switch" ${cat.is_active ? "checked" : ""} data-action="toggle-dlc" data-dlc-id="${escapeHtml(cat.id)}" aria-label="Incluir todo ${escapeHtml(cat.name)} en la rotación">
+                <input type="checkbox" role="switch" ${cat.is_active ? "checked" : ""} data-action="toggle-dlc" data-dlc-id="${escapeHtml(cat.id)}" aria-label="${escapeHtml(t("tracks.includeAllAria", { name }))}">
                 <span class="slider"></span>
               </label>
             </div>
@@ -408,17 +440,17 @@ document.addEventListener("DOMContentLoaded", () => {
   async function runRotationChange(endpoint, body, control) {
     if (control) control.disabled = true;
     const res = await apiPost(endpoint, body);
-    showToast(res.message || "No se pudo actualizar la rotación.", res.success ? "success" : "error");
+    showResultToast(res, "rotation.updateError");
     await Promise.all([syncServerStatus(), loadTracksPool()]);
   }
 
   async function changeTrack(filename, button) {
     if (!filename) return;
-    if (appState.isRunning && !confirm(`Cargar ${filename} reinicia accServer y desconecta a los pilotos. ¿Continuar?`)) return;
+    if (appState.isRunning && !confirm(t("tracks.confirmLoad", { file: filename }))) return;
     await withBusy(button, async () => {
-      showToast(`Cargando ${filename}…`, "info");
+      showToast(t("tracks.loadingToast", { file: filename }), "info");
       const res = await apiPost("/api/rotation/select", { track_file: filename });
-      showToast(res.message, res.success ? "success" : "error");
+      showResultToast(res);
       await Promise.all([syncServerStatus(), loadTracksPool()]);
     });
   }
@@ -429,7 +461,7 @@ document.addEventListener("DOMContentLoaded", () => {
   async function loadTelemetry() {
     const data = await apiGet("/api/telemetry");
     if (!data) {
-      $("track-records-container").innerHTML = emptyState("No se pudo cargar la telemetría", "Se reintentará con «Actualizar».", "error");
+      $("track-records-container").innerHTML = emptyState(t("telemetry.loadError"), t("telemetry.loadErrorText"), "error");
       return;
     }
 
@@ -443,7 +475,7 @@ document.addEventListener("DOMContentLoaded", () => {
             <div class="record-card-time">${formatLapTime(item.time_ms)}</div>
             <div class="record-card-driver">${carPlate(item.car_num)}<strong>${escapeHtml(item.driver)}</strong></div>
           </article>`).join("")
-      : emptyState("Sin récords todavía", "Aparecerán cuando se complete una vuelta válida en cualquier sesión.");
+      : emptyState(t("telemetry.noRecords"), t("telemetry.noRecordsText"));
     markLoaded("track-records-container");
 
     const drivers = Object.entries(data.drivers || {}).sort(([, a], [, b]) =>
@@ -463,9 +495,9 @@ document.addEventListener("DOMContentLoaded", () => {
               <td class="text-center num">${escapeHtml(stats.total_laps)}</td>
             </tr>`;
         }).join("")
-      : emptyRow(6, "Sin pilotos registrados", "La clasificación se construye con los resultados de carrera.");
+      : emptyRow(6, t("telemetry.noDrivers"), t("telemetry.noDriversText"));
     $("drivers-ranking-footnote").textContent = drivers.length > RANKING_LIMIT
-      ? `Mostrando los ${RANKING_LIMIT} primeros de ${drivers.length} pilotos.` : "";
+      ? t("telemetry.footnote", { limit: RANKING_LIMIT, total: drivers.length }) : "";
 
     const sessions = (data.recent_sessions || []).slice(0, SESSIONS_LIMIT);
     $("recent-sessions-list").innerHTML = sessions.length
@@ -479,38 +511,44 @@ document.addEventListener("DOMContentLoaded", () => {
               <div>
                 <div class="session-track">${escapeHtml(s.track_display_name || s.track_name)}</div>
                 <div class="session-meta">
-                  ${winner ? `P1 <strong>${escapeHtml(winner.driver)}</strong> (#${escapeHtml(winner.car_num)})` : "Sin clasificados"}
-                  · ${escapeHtml(s.total_drivers)} pilotos
-                  · Vuelta rápida <span class="session-best">${formatLapTime(fastest)}</span>
+                  ${winner ? `P1 <strong>${escapeHtml(winner.driver)}</strong> (#${escapeHtml(winner.car_num)})` : escapeHtml(t("telemetry.noClassified"))}
+                  · ${escapeHtml(t("telemetry.drivers", { n: s.total_drivers }))}
+                  · ${escapeHtml(t("telemetry.fastestLap"))} <span class="session-best">${formatLapTime(fastest)}</span>
                 </div>
               </div>
               <span class="session-when" title="${escapeHtml(s.filename)}">${escapeHtml(formatResultDate(s.filename))}</span>
             </div>`;
         }).join("")
-      : emptyState("Sin sesiones en results/", "ACC escribe un archivo al terminar cada sesión (dumpLeaderboards = 1).");
+      : emptyState(t("telemetry.noSessions"), t("telemetry.noSessionsText"));
     markLoaded("recent-sessions-list");
   }
 
   // ==========================================================================
   // 4. Configuración (/api/config)
   // ==========================================================================
+  function renderPasswordPlaceholders() {
+    const secretsSet = appState.configData ? (appState.configData.secrets_set || {}) : null;
+    $("cfg-admin-password").placeholder = !secretsSet
+      ? t("config.unchanged") : (secretsSet.adminPassword ? t("config.passwordSet") : t("config.required"));
+    $("cfg-server-password").placeholder = !secretsSet
+      ? t("config.unchanged") : (secretsSet.password ? t("config.passwordSet") : t("config.publicRoom"));
+  }
+
   async function loadConfigData() {
     const data = await apiGet("/api/config");
     if (!data) {
-      showToast("No se pudo cargar la configuración.", "error");
+      showToast(t("config.loadError"), "error");
       return;
     }
     appState.configData = data;
     const s = data.settings || {};
     const e = data.event || {};
     const a = data.assistRules || {};
-    const secretsSet = data.secrets_set || {};
 
     $("cfg-server-name").value = s.serverName || "";
     $("cfg-admin-password").value = "";
-    $("cfg-admin-password").placeholder = secretsSet.adminPassword ? "•••••••• (sin cambios)" : "Obligatoria";
     $("cfg-server-password").value = "";
-    $("cfg-server-password").placeholder = secretsSet.password ? "•••••••• (sin cambios)" : "Sala pública (sin contraseña)";
+    renderPasswordPlaceholders();
     $("cfg-clear-server-password").checked = false;
     $("cfg-max-slots").value = s.maxCarSlots ?? 24;
     $("cfg-is-race-locked").value = s.isRaceLocked ?? 1;
@@ -536,7 +574,7 @@ document.addEventListener("DOMContentLoaded", () => {
     ev.preventDefault();
     const form = ev.currentTarget;
     if (!appState.configData) {
-      showToast("La configuración aún no se ha cargado.", "error");
+      showToast(t("config.notLoaded"), "error");
       return;
     }
     form.classList.add("was-validated");
@@ -579,10 +617,10 @@ document.addEventListener("DOMContentLoaded", () => {
     await withBusy($("btn-save-config"), async () => {
       const res = await apiPost("/api/config", { settings: s, event: e, assistRules: a, configuration: c });
       if (res.success) {
-        showToast("Configuración guardada en UTF-16 LE. Se aplicará en el próximo arranque.", "success");
+        showToast(t("config.saved"), "success");
         await Promise.all([loadConfigData(), syncServerStatus()]);
       } else {
-        showToast(res.message || "No se pudo guardar la configuración.", "error");
+        showResultToast(res, "config.saveError");
       }
     });
   });
@@ -607,20 +645,35 @@ document.addEventListener("DOMContentLoaded", () => {
     const data = await apiGet(`/api/logs?lines=${lines}&hide_spam=${hideSpam}`);
     if (!data || !data.logs) return;
 
+    // Si server.log no existe o no se puede leer, el backend devuelve un único aviso en español.
+    const logLines = data.logs.length === 1 ? [tr(data.logs[0])] : data.logs;
     const terminalWindow = $("logs-terminal-window");
-    $("logs-content").innerHTML = data.logs.map(line => highlightLogLine(line.replace(/\n$/, ""))).join("\n");
-    $("logs-hidden-count").textContent = data.hidden_spam_lines ? `${data.hidden_spam_lines} líneas de spam ocultas` : "";
+    $("logs-content").innerHTML = logLines.map(line => highlightLogLine(line.replace(/\n$/, ""))).join("\n");
+    $("logs-content").dataset.loaded = "1";
+    $("logs-hidden-count").textContent = data.hidden_spam_lines ? t("logs.hiddenCount", { n: data.hidden_spam_lines }) : "";
     if (appState.autoScrollLogs) terminalWindow.scrollTop = terminalWindow.scrollHeight;
+  }
+
+  function renderAutoScrollButton() {
+    const button = $("btn-autoscroll-toggle");
+    button.classList.toggle("active", appState.autoScrollLogs);
+    button.setAttribute("aria-pressed", String(appState.autoScrollLogs));
+    button.textContent = appState.autoScrollLogs ? t("logs.autoscroll") : t("logs.autoscrollPaused");
   }
 
   // ==========================================================================
   // 6. Pilotos y moderación (/api/players)
   // ==========================================================================
+  function renderLiveCount(sessionName = "") {
+    const key = appState.activePlayers === 1 ? "players.onlineOne" : "players.onlineMany";
+    $("live-drivers-count-tag").textContent = t(key, { n: appState.activePlayers, session: sessionName });
+  }
+
   async function loadPlayersData() {
     const data = await apiGet("/api/players");
     const activeTbody = $("active-players-tbody");
     if (!data) {
-      activeTbody.innerHTML = emptyRow(7, "No se pudo consultar /api/players", "Se reintentará automáticamente.", "error");
+      activeTbody.innerHTML = emptyRow(7, t("players.queryError"), t("players.queryErrorText"), "error");
       return;
     }
 
@@ -629,35 +682,31 @@ document.addEventListener("DOMContentLoaded", () => {
     const counter = $("active-players-counter");
     counter.textContent = appState.activePlayers;
     counter.classList.toggle("has-players", appState.activePlayers > 0);
-    const sessionName = data.session && data.session.name ? ` · ${data.session.name}` : "";
-    const countTag = $("live-drivers-count-tag");
-    countTag.textContent = `${appState.activePlayers} ${appState.activePlayers === 1 ? "piloto" : "pilotos"} en línea${sessionName}`;
-    countTag.title = data.live_source === "stream"
-      ? "Datos en tiempo real desde la consola de accServer"
-      : "Datos desde server.log: accServer lo escribe con buffer y puede ir con retraso";
+    renderLiveCount(data.session && data.session.name ? ` · ${data.session.name}` : "");
+    $("live-drivers-count-tag").title = data.live_source === "stream" ? t("players.sourceStream") : t("players.sourceLog");
 
     if (data.live_error) {
-      activeTbody.innerHTML = emptyRow(7, "No se pudo leer server.log", data.live_error, "error");
+      activeTbody.innerHTML = emptyRow(7, t("players.logError"), tr(data.live_error), "error");
     } else if (data.server_running === undefined) {
-      activeTbody.innerHTML = emptyRow(7, "Backend desactualizado", "Recompila ACC_AdminPanel.exe (build_release.bat) para ver pilotos en vivo.", "error");
+      activeTbody.innerHTML = emptyRow(7, t("players.outdated"), t("players.outdatedText"), "error");
     } else if (!data.server_running) {
-      activeTbody.innerHTML = emptyRow(7, "Servidor detenido", "Inicia accServer desde el panel para ver a los pilotos en vivo.", "offline");
+      activeTbody.innerHTML = emptyRow(7, t("players.stopped"), t("players.stoppedText"), "offline");
     } else if (active.length === 0) {
-      activeTbody.innerHTML = emptyRow(7, "Pista vacía", "Esperando conexiones en el lobby.");
+      activeTbody.innerHTML = emptyRow(7, t("players.empty"), t("players.emptyText"));
     } else {
       activeTbody.innerHTML = active.map(p => `
         <tr>
           <td>${carPlate(p.race_number ?? p.car_id)}</td>
           <td><span class="driver-pill">${escapeHtml(p.driver_name)}</span>
-            ${p.is_admin ? '<span class="badge-admin">ADMIN</span>' : ""}${p.is_banned ? '<span class="badge-banned">BANEADO</span>' : ""}</td>
+            ${p.is_admin ? `<span class="badge-admin">${escapeHtml(t("badge.admin"))}</span>` : ""}${p.is_banned ? `<span class="badge-banned">${escapeHtml(t("badge.banned"))}</span>` : ""}</td>
           <td>${escapeHtml(p.car_model_name)}</td>
           <td><a href="${steamProfileUrl(p.player_id)}" target="_blank" rel="noopener noreferrer" class="steam-link">${escapeHtml(p.player_id)}</a></td>
-          <td class="text-center"><span class="conn-id" title="connId / carId según server.log">${escapeHtml(p.conn_id)} / ${escapeHtml(p.car_id)}</span></td>
+          <td class="text-center"><span class="conn-id" title="${escapeHtml(t("players.connTitle"))}">${escapeHtml(p.conn_id)} / ${escapeHtml(p.car_id)}</span></td>
           <td class="text-center">${p.lag_ms
-            ? `<span class="status-chip lag" title="accServer no recibe paquetes UDP del piloto desde hace ${escapeHtml(p.lag_ms)} ms">LAG ${(p.lag_ms / 1000).toFixed(1)} s</span>`
-            : '<span class="status-chip">EN PISTA</span>'}</td>
+            ? `<span class="status-chip lag" title="${escapeHtml(t("players.lagTitle", { ms: p.lag_ms }))}">${escapeHtml(t("players.lag", { s: (p.lag_ms / 1000).toFixed(1) }))}</span>`
+            : `<span class="status-chip">${escapeHtml(t("players.onTrack"))}</span>`}</td>
           <td class="text-center">
-            <button type="button" class="btn btn-sm btn-secondary" data-action="open-modal" data-payload="${encodePayload(p)}">Moderar</button>
+            <button type="button" class="btn btn-sm btn-secondary" data-action="open-modal" data-payload="${encodePayload(p)}">${escapeHtml(t("players.moderate"))}</button>
           </td>
         </tr>`).join("");
     }
@@ -666,12 +715,14 @@ document.addEventListener("DOMContentLoaded", () => {
     $("recent-players-tbody").innerHTML = recent.length
       ? recent.map(p => {
           const payload = encodePayload(p);
-          const role = p.is_admin ? '<span class="role-admin">Admin</span>' : (p.is_banned ? '<span class="role-banned">Baneado</span>' : "Piloto");
+          const role = p.is_admin
+            ? `<span class="role-admin">${escapeHtml(t("role.admin"))}</span>`
+            : (p.is_banned ? `<span class="role-banned">${escapeHtml(t("role.banned"))}</span>` : escapeHtml(t("role.driver")));
           return `
             <tr>
               <td>${carPlate(p.race_number || "—")}</td>
               <td><span class="driver-pill">${escapeHtml(p.driver_name)}</span>
-                ${p.is_admin ? '<span class="badge-admin">ADMIN</span>' : ""}${p.is_banned ? '<span class="badge-banned">BANEADO</span>' : ""}</td>
+                ${p.is_admin ? `<span class="badge-admin">${escapeHtml(t("badge.admin"))}</span>` : ""}${p.is_banned ? `<span class="badge-banned">${escapeHtml(t("badge.banned"))}</span>` : ""}</td>
               <td>${escapeHtml(p.car_model_name)}</td>
               <td><a href="${steamProfileUrl(p.player_id)}" target="_blank" rel="noopener noreferrer" class="steam-link">${escapeHtml(p.player_id)}</a></td>
               <td class="text-center num" style="color: var(--timing-purple);">${formatLapTime(p.best_lap_ms)}</td>
@@ -679,27 +730,27 @@ document.addEventListener("DOMContentLoaded", () => {
               <td class="text-center">${role}</td>
               <td>
                 <div class="row-actions">
-                  <button type="button" class="btn btn-sm btn-secondary" data-action="open-modal" data-payload="${payload}">Moderar</button>
-                  <button type="button" class="btn btn-sm btn-secondary" data-action="toggle-admin" data-payload="${payload}" data-make-admin="${!p.is_admin}">${p.is_admin ? "Quitar admin" : "Hacer admin"}</button>
-                  <button type="button" class="btn btn-sm btn-stop" data-action="ban-player" data-payload="${payload}" aria-label="Añadir ${escapeHtml(p.driver_name)} a la lista negra">Ban</button>
+                  <button type="button" class="btn btn-sm btn-secondary" data-action="open-modal" data-payload="${payload}">${escapeHtml(t("players.moderate"))}</button>
+                  <button type="button" class="btn btn-sm btn-secondary" data-action="toggle-admin" data-payload="${payload}" data-make-admin="${!p.is_admin}">${escapeHtml(p.is_admin ? t("players.removeAdmin") : t("players.makeAdmin"))}</button>
+                  <button type="button" class="btn btn-sm btn-stop" data-action="ban-player" data-payload="${payload}" aria-label="${escapeHtml(t("players.banAria", { name: p.driver_name }))}">${escapeHtml(t("players.ban"))}</button>
                 </div>
               </td>
             </tr>`;
         }).join("")
-      : emptyRow(8, "Sin historial", "Todavía no hay pilotos en results/.");
+      : emptyRow(8, t("players.noHistory"), t("players.noHistoryText"));
 
     const banlist = data.banlist || [];
     $("banlist-tbody").innerHTML = banlist.length
       ? banlist.map(b => `
           <tr>
-            <td class="driver-pill">${escapeHtml(b.driverName || "Desconocido")}</td>
+            <td class="driver-pill">${escapeHtml(b.driverName || t("ban.unknown"))}</td>
             <td><code>${escapeHtml(b.playerId)}</code></td>
-            <td style="color: #ff8a94;">${escapeHtml(b.reason || "Sin motivo")}</td>
+            <td style="color: #ff8a94;">${escapeHtml(b.reason || t("ban.noReason"))}</td>
             <td class="text-center">
-              <button type="button" class="btn btn-sm btn-secondary" data-action="unban-player" data-payload="${encodePayload({ player_id: b.playerId })}">Desbanear</button>
+              <button type="button" class="btn btn-sm btn-secondary" data-action="unban-player" data-payload="${encodePayload({ player_id: b.playerId })}">${escapeHtml(t("ban.unban"))}</button>
             </td>
           </tr>`).join("")
-      : emptyRow(4, "Lista negra vacía");
+      : emptyRow(4, t("ban.empty"));
 
     const entrylist = data.entrylist || {};
     const entries = entrylist.entries || [];
@@ -707,19 +758,21 @@ document.addEventListener("DOMContentLoaded", () => {
     $("entrylist-tbody").innerHTML = entries.length
       ? entries.map(e => {
           const driver = (e.drivers && e.drivers[0]) || {};
-          const name = `${driver.firstName || ""} ${driver.lastName || ""}`.trim() || "Piloto registrado";
+          const name = `${driver.firstName || ""} ${driver.lastName || ""}`.trim() || t("entry.registered");
           return `
             <tr>
               <td class="driver-pill">${escapeHtml(name)}</td>
               <td><code>${escapeHtml(driver.playerID || "—")}</code></td>
               <td class="text-center">${carPlate(e.raceNumber || "—")}</td>
-              <td class="text-center">${e.isServerAdmin === 1 ? '<span class="badge-admin">ADMIN</span>' : '<span class="badge-tag">AUTORIZADO</span>'}</td>
+              <td class="text-center">${e.isServerAdmin === 1
+                ? `<span class="badge-admin">${escapeHtml(t("badge.admin"))}</span>`
+                : `<span class="badge-tag">${escapeHtml(t("entry.authorized"))}</span>`}</td>
               <td class="text-center">
-                <button type="button" class="btn btn-sm btn-secondary" data-action="remove-entry" data-payload="${encodePayload({ player_id: driver.playerID || "", driver_name: name })}">Quitar</button>
+                <button type="button" class="btn btn-sm btn-secondary" data-action="remove-entry" data-payload="${encodePayload({ player_id: driver.playerID || "", driver_name: name })}">${escapeHtml(t("entry.remove"))}</button>
               </td>
             </tr>`;
         }).join("")
-      : emptyRow(5, "Entry list vacía", "Registra pilotos para darles dorsal fijo o rango de administrador.");
+      : emptyRow(5, t("entry.empty"), t("entry.emptyText"));
   }
 
   // ==========================================================================
@@ -730,6 +783,14 @@ document.addEventListener("DOMContentLoaded", () => {
   let currentModDriver = null;
   let currentModCar = null;
 
+  function renderModalLabels() {
+    if (!currentModDriver) return;
+    setLoadedText("mod-modal-driver-name", currentModDriver.driver_name || t("modal.driver"));
+    const adminLabel = $("btn-mod-toggle-admin").querySelector("span");
+    adminLabel.textContent = currentModDriver.is_admin ? t("modal.removeAdmin") : t("modal.assignAdmin");
+    adminLabel.dataset.loaded = "1";
+  }
+
   function openModModal(payload) {
     const driver = decodePayload(payload);
     modalTrigger = document.activeElement;
@@ -737,14 +798,13 @@ document.addEventListener("DOMContentLoaded", () => {
     currentModCar = driver.race_number || driver.car_id || 1;
 
     $("mod-modal-car-badge").textContent = currentModCar;
-    $("mod-modal-driver-name").textContent = driver.driver_name || "Piloto";
     $("mod-modal-car-model").textContent = driver.car_model_name || "—";
     $("mod-modal-steamid").textContent = driver.player_id || "—";
     $("mod-modal-steam-link").href = steamProfileUrl(driver.player_id);
     COMMANDS.forEach(command => {
       $(`btn-cmd-${command}`).querySelector(".cmd-text").textContent = `/${command} ${currentModCar}`;
     });
-    $("btn-mod-toggle-admin").querySelector("span").textContent = driver.is_admin ? "Quitar administrador" : "Asignar administrador";
+    renderModalLabels();
 
     modal.classList.remove("hidden");
     $("btn-close-mod-modal").focus();
@@ -782,8 +842,8 @@ document.addEventListener("DOMContentLoaded", () => {
 
   function copyCommand(command) {
     navigator.clipboard.writeText(command)
-      .then(() => showToast(`Copiado «${command}». Pégalo en el chat de ACC.`, "success"))
-      .catch(() => showToast(`Comando: ${command}`, "info"));
+      .then(() => showToast(t("copy.copied", { cmd: command }), "success"))
+      .catch(() => showToast(t("copy.fallback", { cmd: command }), "info"));
   }
 
   const COMMANDS = ["kick", "ban", "dq", "dt", "dtc", "sg10", "sg30", "tp5", "tp15", "clear"];
@@ -800,13 +860,13 @@ document.addEventListener("DOMContentLoaded", () => {
       carNumber: carNumber || 99,
       isAdmin: makeAdmin
     });
-    showToast(res.message, res.success ? "success" : "error");
+    showResultToast(res);
     await loadPlayersData();
     return res.success;
   }
 
   async function banDriver(driver, carNumber) {
-    const reason = prompt(`Motivo del baneo para ${driver.driver_name}:`, "Conducta antideportiva");
+    const reason = prompt(t("ban.promptReason", { name: driver.driver_name }), t("ban.defaultReason"));
     if (!reason) return false;
     const res = await apiPost("/api/moderation/ban", {
       playerId: driver.player_id,
@@ -814,7 +874,7 @@ document.addEventListener("DOMContentLoaded", () => {
       carNumber: carNumber || 0,
       reason
     });
-    showToast(res.message, res.success ? "success" : "error");
+    showResultToast(res);
     await loadPlayersData();
     return res.success;
   }
@@ -862,24 +922,24 @@ document.addEventListener("DOMContentLoaded", () => {
       }
       if (action === "unban-player") {
         const player = decodePayload(payload);
-        if (!confirm(`¿Quitar de la lista negra a ${player.player_id}?`)) return;
+        if (!confirm(t("ban.confirmUnban", { id: player.player_id }))) return;
         await withBusy(control, async () => {
           const res = await apiPost("/api/moderation/unban", { playerId: player.player_id });
-          showToast(res.message, res.success ? "success" : "error");
+          showResultToast(res);
           await loadPlayersData();
         });
       }
       if (action === "remove-entry") {
         const entry = decodePayload(payload);
-        if (!confirm(`¿Quitar a ${entry.driver_name} (${entry.player_id}) de la entry list?`)) return;
+        if (!confirm(t("entry.confirmRemove", { name: entry.driver_name, id: entry.player_id }))) return;
         await withBusy(control, async () => {
           const res = await apiPost("/api/entrylist/remove", { playerId: entry.player_id });
-          showToast(res.message || "No se pudo quitar la entrada.", res.success ? "success" : "error");
+          showResultToast(res, "entry.removeError");
           await loadPlayersData();
         });
       }
     } catch {
-      showToast("La acción contiene datos inválidos.", "error");
+      showToast(t("action.invalidData"), "error");
     }
   });
 
@@ -888,25 +948,25 @@ document.addEventListener("DOMContentLoaded", () => {
   // ==========================================================================
   $("btn-start").addEventListener("click", ev => withBusy(ev.currentTarget, async () => {
     const res = await apiPost("/api/server/start");
-    showToast(res.message, res.success ? "success" : "error");
+    showResultToast(res);
     await syncServerStatus();
   }));
 
   $("btn-restart").addEventListener("click", ev => {
-    if (!confirm("Reiniciar accServer desconectará a todos los pilotos. ¿Continuar?")) return;
+    if (!confirm(t("server.confirmRestart"))) return;
     withBusy(ev.currentTarget, async () => {
-      showToast("Reiniciando servidor y liberando puertos…", "info");
+      showToast(t("server.restarting"), "info");
       const res = await apiPost("/api/server/restart");
-      showToast(res.message, res.success ? "success" : "error");
+      showResultToast(res);
       await syncServerStatus();
     });
   });
 
   $("btn-stop").addEventListener("click", ev => {
-    if (!confirm("¿Detener accServer? Los pilotos conectados serán desconectados.")) return;
+    if (!confirm(t("server.confirmStop"))) return;
     withBusy(ev.currentTarget, async () => {
       const res = await apiPost("/api/server/stop");
-      showToast(res.message, res.success ? "success" : "error");
+      showResultToast(res);
       await syncServerStatus();
     });
   });
@@ -921,14 +981,14 @@ document.addEventListener("DOMContentLoaded", () => {
     appState.rotationRequestPending = false;
     toggle.disabled = false;
     if (!res.success) renderAutoRotation(!enabled);
-    showToast(res.message || "No se pudo cambiar la auto-rotación.", res.success ? "info" : "error");
+    showResultToast(res, "rotation.toggleError", "info");
   });
 
   $("btn-skip-track").addEventListener("click", ev => {
-    if (appState.isRunning && !confirm("Saltar de pista reinicia accServer y desconecta a los pilotos. ¿Continuar?")) return;
+    if (appState.isRunning && !confirm(t("rotation.confirmSkip"))) return;
     withBusy(ev.currentTarget, async () => {
       const res = await apiPost("/api/rotation/skip");
-      showToast(res.message, res.success ? "success" : "error");
+      showResultToast(res);
       await Promise.all([syncServerStatus(), loadTracksPool()]);
     });
   });
@@ -945,11 +1005,9 @@ document.addEventListener("DOMContentLoaded", () => {
   $("toggle-hide-spam").addEventListener("change", loadLogs);
   $("select-log-lines").addEventListener("change", loadLogs);
 
-  $("btn-autoscroll-toggle").addEventListener("click", ev => {
+  $("btn-autoscroll-toggle").addEventListener("click", () => {
     appState.autoScrollLogs = !appState.autoScrollLogs;
-    ev.currentTarget.classList.toggle("active", appState.autoScrollLogs);
-    ev.currentTarget.setAttribute("aria-pressed", String(appState.autoScrollLogs));
-    ev.currentTarget.textContent = appState.autoScrollLogs ? "Auto-scroll" : "Auto-scroll (pausado)";
+    renderAutoScrollButton();
   });
 
   $("form-add-ban").addEventListener("submit", async ev => {
@@ -962,7 +1020,7 @@ document.addEventListener("DOMContentLoaded", () => {
         carNumber: 0,
         reason: $("ban-input-reason").value.trim()
       });
-      showToast(res.message, res.success ? "success" : "error");
+      showResultToast(res);
       if (res.success) form.reset();
       await loadPlayersData();
     });
@@ -978,7 +1036,7 @@ document.addEventListener("DOMContentLoaded", () => {
         carNumber: parseInt($("entry-input-num").value, 10) || 99,
         isAdmin: $("entry-input-is-admin").checked
       });
-      showToast(res.message, res.success ? "success" : "error");
+      showResultToast(res);
       if (res.success) form.reset();
       await loadPlayersData();
     });
@@ -991,7 +1049,7 @@ document.addEventListener("DOMContentLoaded", () => {
     const res = await apiPost("/api/entrylist/force", { enabled });
     toggle.disabled = false;
     if (!res.success) toggle.checked = !enabled;
-    showToast(res.message || "No se pudo cambiar la whitelist.", res.success ? "success" : "error");
+    showResultToast(res, "entry.forceError");
   });
 
   // ==========================================================================
@@ -1034,6 +1092,25 @@ document.addEventListener("DOMContentLoaded", () => {
   });
 
   // ==========================================================================
+  // Cambio de idioma: i18n.js ya tradujo los textos fijos; aquí se redibuja lo dinámico.
+  // No se recarga la configuración para no pisar lo que el usuario esté editando.
+  // ==========================================================================
+  document.addEventListener("panel:languagechange", () => {
+    appState.suppressFlashUntil = Date.now() + 2000;
+    renderConnection();
+    renderAutoRotation($("auto-rotation-toggle").checked);
+    renderAutoScrollButton();
+    renderLiveCount();
+    renderPasswordPlaceholders();
+    renderModalLabels();
+    syncServerStatus();
+    loadTracksPool();
+    loadTelemetry();
+    loadPlayersData();
+    loadLogs();
+  });
+
+  // ==========================================================================
   // Arranque y sondeo secuencial (sin solapar peticiones; más lento en segundo plano)
   // ==========================================================================
   async function pollTick() {
@@ -1049,6 +1126,10 @@ document.addEventListener("DOMContentLoaded", () => {
       setTimeout(pollLoop, document.hidden ? POLL_HIDDEN_INTERVAL_MS : POLL_INTERVAL_MS);
     }
   }
+
+  renderAutoScrollButton();
+  renderLiveCount();
+  renderPasswordPlaceholders();
 
   const initialTab = `tab-${(location.hash || "").replace("#", "")}`;
   syncServerStatus();

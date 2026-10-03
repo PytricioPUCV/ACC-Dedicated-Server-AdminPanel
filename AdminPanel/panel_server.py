@@ -28,6 +28,9 @@ if sys.stdout:
 if sys.stderr:
     sys.stderr.reconfigure(encoding='utf-8', errors='replace')
 
+# Versión publicada del panel: build_exe.py la usa para nombrar el release.
+PANEL_VERSION = "1.1"
+
 # --- 1. Elevación UAC en Windows ---
 IS_FROZEN = getattr(sys, "frozen", False)
 BUNDLE_DIR = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
@@ -1771,7 +1774,7 @@ def run_server(port=8080, host="127.0.0.1", open_browser=True, new_token=False):
     access_url = f"http://127.0.0.1:{port}/?token={PANEL_TOKEN}"
     token_source = "variable ACC_PANEL_TOKEN" if os.environ.get("ACC_PANEL_TOKEN", "").strip() else AUTH_FILE
     print("=" * 68)
-    print(f"[+] ASSETTO CORSA COMPETIZIONE - ADMIN CONTROL PANEL v1.0")
+    print(f"[+] ASSETTO CORSA COMPETIZIONE - ADMIN CONTROL PANEL v{PANEL_VERSION}")
     print(f"[*] Carpeta Servidor ACC : {SERVER_DIR}")
     print(f"[*] Acceso web local     : http://127.0.0.1:{port}/?token=<token>")
     print(f"[*] Token                : {mask_token(PANEL_TOKEN)} (completo en {token_source})")
@@ -1805,7 +1808,7 @@ if __name__ == "__main__":
             skip_next = False
             continue
         if arg in {"--help", "-h"}:
-            print("ACC Dedicated Server Admin Panel v1.0")
+            print(f"ACC Dedicated Server Admin Panel v{PANEL_VERSION}")
             print("Uso: ACC_AdminPanel.exe [PUERTO] [OPCIONES]")
             print("\nOpciones:")
             print("  --lan                Permitir conexiones desde cualquier IP local (0.0.0.0)")

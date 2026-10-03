@@ -1,5 +1,5 @@
 @echo off
-title ACC Admin Panel - Compilar Release 1.0
+title ACC Admin Panel - Compilar Release
 cd /d "%~dp0"
 
 echo ======================================================================

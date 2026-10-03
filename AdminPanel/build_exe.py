@@ -1,15 +1,26 @@
 import os
+import re
 import shutil
 import subprocess
 import sys
 import zipfile
 
+def read_panel_version(admin_panel_dir):
+    """Lee PANEL_VERSION de panel_server.py sin importarlo (importarlo dispararía su inicialización)."""
+    with open(os.path.join(admin_panel_dir, "panel_server.py"), encoding="utf-8") as f:
+        match = re.search(r'^PANEL_VERSION = "([^"]+)"', f.read(), re.MULTILINE)
+    if not match:
+        raise SystemExit("[!] Error: no se encontró PANEL_VERSION en panel_server.py")
+    return match.group(1)
+
+
 def main():
+    admin_panel_dir = os.path.dirname(os.path.abspath(__file__))
+    version = read_panel_version(admin_panel_dir)
     print("=" * 68)
-    print("  ASSETTO CORSA COMPETIZIONE - GENERADOR DE EJECUTABLE RELEASE 1.0")
+    print(f"  ASSETTO CORSA COMPETIZIONE - GENERADOR DE EJECUTABLE RELEASE {version}")
     print("=" * 68)
 
-    admin_panel_dir = os.path.dirname(os.path.abspath(__file__))
     server_dir = os.path.dirname(admin_panel_dir)
     web_dir = os.path.join(admin_panel_dir, "web")
     tracks_pool_dir = os.path.join(server_dir, "tracks_pool")
@@ -65,7 +76,7 @@ def main():
     shutil.copy2(built_exe, target_server_exe)
     print(f"[+] Copiado a la raíz del servidor: {target_server_exe}")
 
-    # 4. Crear carpeta Release 1.0 para distribución en GitHub
+    # 4. Crear carpeta Release para distribución en GitHub
     os.makedirs(release_dir, exist_ok=True)
     release_exe = os.path.join(release_dir, "ACC_AdminPanel.exe")
     shutil.copy2(built_exe, release_exe)
@@ -78,8 +89,8 @@ def main():
             shutil.copy2(os.path.join(tracks_pool_dir, track_file), os.path.join(release_tracks_dir, track_file))
 
     # Crear LEEME_INSTALACION.txt
-    readme_content = """======================================================================
-  ASSETTO CORSA COMPETIZIONE - DEDICATED SERVER ADMIN PANEL v1.0
+    readme_content = f"""======================================================================
+  ASSETTO CORSA COMPETIZIONE - DEDICATED SERVER ADMIN PANEL v{version}
 ======================================================================
 
 ¡Gracias por descargar el Admin Panel y Rotador Dinámico para ACC!
@@ -96,16 +107,21 @@ INSTRUCCIONES DE USO RÁPIDO:
    - Se abrirá automáticamente tu navegador web con tu sesión segura activa:
      http://127.0.0.1:8080/?token=...
 
-3. ¡Listo! Ya puedes encender el servidor, rotar circuitos automáticamente,
-   modificar slots/asistencias, ver telemetría de carrera y moderar pilotos.
+3. ¡Listo! Inicia accServer con el botón "Iniciar" del panel (así el panel
+   recibe su consola en tiempo real y detecta a los pilotos al instante).
+
+   - La consola sólo muestra el token enmascarado; el completo está en
+     panel_auth.json. Para generar uno nuevo: ACC_AdminPanel.exe --new-token
+   - Ayuda de opciones: ACC_AdminPanel.exe --help
 
 CARACTERÍSTICAS INCLUIDAS:
 --------------------------
-* Rotación de circuitos 100% automática tras el podio de cada carrera.
+* Pilotos en vivo con dorsal, coche y Steam ID, aviso de lag y moderación.
+* Rotación de circuitos automática tras la carrera final de cada evento.
 * Catálogo oficial de los 25 circuitos de ACC agrupados por DLCs (Base, IGTC, British GT, USA, etc.).
-* Telemetría en vivo, mejores vueltas, historial y podios.
-* Consola de registros (logs) en tiempo real.
-* Editor en caliente de configuraciones (garantiza UTF-16 LE con BOM para evitar errores de ACC).
+* Telemetría: récords de vuelta, clasificación de pilotos e historial de sesiones.
+* Consola de registros en tiempo real con filtro del spam de onCarUpdate.
+* Editor de configuración que escribe UTF-16 LE con BOM, como exige ACC.
 * Cero dependencias externas requeridas (Python viene incrustado en el .exe).
 
 Desarrollado con pasión para la comunidad de simracing.
@@ -115,7 +131,11 @@ Desarrollado con pasión para la comunidad de simracing.
         f.write(readme_content)
 
     # 5. Generar archivo comprimido ZIP para subir a GitHub Releases
-    zip_path = os.path.join(release_dir, "ACC_Server_AdminPanel_v1.0.zip")
+    # Retirar ZIPs de versiones anteriores para no subir el que no corresponde.
+    for old_zip in os.listdir(release_dir):
+        if old_zip.startswith("ACC_Server_AdminPanel_v") and old_zip.endswith(".zip"):
+            os.remove(os.path.join(release_dir, old_zip))
+    zip_path = os.path.join(release_dir, f"ACC_Server_AdminPanel_v{version}.zip")
     print(f"[*] Creando archivo comprimido para GitHub Release: {zip_path}...")
     with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
         zf.write(release_exe, arcname="ACC_AdminPanel.exe")
@@ -129,7 +149,7 @@ Desarrollado con pasión para la comunidad de simracing.
 
     zip_size_mb = os.path.getsize(zip_path) / (1024 * 1024)
     print("\n" + "=" * 68)
-    print("  ¡RELEASE 1.0 EMPAQUETADO CON ÉXITO!")
+    print(f"  ¡RELEASE {version} EMPAQUETADO CON ÉXITO!")
     print(f"  Ejecutable standalone : {release_exe}")
     print(f"  Paquete ZIP de Release: {zip_path} ({zip_size_mb:.2f} MB)")
     print("=" * 68)

@@ -1430,6 +1430,7 @@ class AdminPanelHandler(BaseHTTPRequestHandler):
             "rotation_pool": TRACK_ROTATION,
             "status_message": msg,
             "track_name": event_cfg.get("track", "Desconocido"),
+            "track_display_name": TRACK_NAME_MAP.get(event_cfg.get("track"), event_cfg.get("track", "Desconocido")),
             "server_name": settings_cfg.get("serverName", "ACC Dedicated Server"),
             "max_car_slots": settings_cfg.get("maxCarSlots", 24),
             "is_race_locked": settings_cfg.get("isRaceLocked"),
@@ -1601,6 +1602,7 @@ class AdminPanelHandler(BaseHTTPRequestHandler):
                     if best_lap_ms and best_lap_ms < 2147483647:
                         if track_name not in best_laps_by_track or best_lap_ms < best_laps_by_track[track_name]["time_ms"]:
                             best_laps_by_track[track_name] = {
+                                "track_display_name": TRACK_NAME_MAP.get(track_name, track_name),
                                 "driver": driver_name,
                                 "time_ms": best_lap_ms,
                                 "car_num": car_num,
@@ -1631,6 +1633,7 @@ class AdminPanelHandler(BaseHTTPRequestHandler):
                     "filename": f,
                     "session_type": session_type,
                     "track_name": track_name,
+                    "track_display_name": TRACK_NAME_MAP.get(track_name, track_name),
                     "server_name": data.get("serverName", ""),
                     "leaderboard": clean_leaderboard,
                     "total_drivers": len(leaderboard)

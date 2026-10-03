@@ -1,9 +1,12 @@
 /**
- * ASSETTO CORSA COMPETIZIONE — ADMIN CONTROL PANEL FRONTEND
- * Reactive state management, REST API polling, and motorsport UI interactions
+ * ASSETTO CORSA COMPETIZIONE — RACE CONTROL (frontend)
+ * Estado reactivo, sondeo de la API REST e interacciones del panel. Vanilla JS, sin dependencias.
  */
 
 document.addEventListener("DOMContentLoaded", () => {
+  const $ = id => document.getElementById(id);
+
+  // --- Token de acceso: se toma de la URL una vez y se guarda en la sesión del navegador ---
   const url = new URL(window.location.href);
   const tokenFromUrl = url.searchParams.get("token");
   if (tokenFromUrl) {
@@ -12,35 +15,41 @@ document.addEventListener("DOMContentLoaded", () => {
     window.history.replaceState({}, document.title, `${url.pathname}${url.search}${url.hash}`);
   }
   const panelToken = sessionStorage.getItem("acc-panel-token") || "";
-  let authorizationWarningShown = false;
 
-  // --- Estado Local ---
-  let appState = {
+  const POLL_INTERVAL_MS = 3000;
+  const POLL_HIDDEN_INTERVAL_MS = 15000;
+  const RANKING_LIMIT = 15;
+  const SESSIONS_LIMIT = 12;
+
+  const appState = {
     isRunning: false,
-    autoRotation: true,
-    currentTrack: "",
-    tracksList: [],
+    unmanaged: false,
+    currentTab: "tab-telemetry",
     configData: null,
     autoScrollLogs: true,
-    currentTab: "tab-telemetry"
+    rotationRequestPending: false,
+    activePlayers: 0
   };
 
-  // --- Helpers de Tiempo y Formato ---
+  // ==========================================================================
+  // Helpers de formato
+  // ==========================================================================
   function formatLapTime(ms) {
-    if (!ms || ms >= 2147483647) return "—:——.———";
-    const totalSec = ms / 1000;
-    const minutes = Math.floor(totalSec / 60);
-    const seconds = (totalSec % 60).toFixed(3);
-    const secStr = seconds < 10 ? `0${seconds}` : seconds;
-    return `${minutes}:${secStr}`;
+    if (!ms || ms <= 0 || ms >= 2147483647) return "—";
+    const minutes = Math.floor(ms / 60000);
+    const seconds = ((ms % 60000) / 1000).toFixed(3).padStart(6, "0");
+    return `${minutes}:${seconds}`;
   }
 
   function formatUptime(seconds) {
     if (!seconds || seconds <= 0) return "00:00:00";
-    const hrs = Math.floor(seconds / 3600).toString().padStart(2, "0");
-    const mins = Math.floor((seconds % 3600) / 60).toString().padStart(2, "0");
-    const secs = Math.floor(seconds % 60).toString().padStart(2, "0");
-    return `${hrs}:${mins}:${secs}`;
+    const pad = value => String(Math.floor(value)).padStart(2, "0");
+    return `${pad(seconds / 3600)}:${pad((seconds % 3600) / 60)}:${pad(seconds % 60)}`;
+  }
+
+  function formatResultDate(filename) {
+    const match = /^(\d{2})(\d{2})(\d{2})_(\d{2})(\d{2})/.exec(String(filename || ""));
+    return match ? `${match[3]}/${match[2]} ${match[4]}:${match[5]}` : "";
   }
 
   function escapeHtml(value) {
@@ -51,7 +60,9 @@ document.addEventListener("DOMContentLoaded", () => {
 
   function encodePayload(value) {
     const bytes = new TextEncoder().encode(JSON.stringify(value));
-    return btoa(String.fromCharCode(...bytes));
+    let binary = "";
+    bytes.forEach(byte => { binary += String.fromCharCode(byte); });
+    return btoa(binary);
   }
 
   function decodePayload(value) {
@@ -69,1040 +80,976 @@ document.addEventListener("DOMContentLoaded", () => {
     return ["p", "fp", "q", "r"].includes(normalized) ? normalized : "fp";
   }
 
-  // --- Sistema de Notificaciones Toast ---
+  function percent(value) {
+    return typeof value === "number" ? `${Math.round(value * 100)}%` : "—";
+  }
+
+  // Actualiza un texto y lo destaca brevemente si cambió (sin animar la primera carga).
+  function setText(id, value) {
+    const element = $(id);
+    if (!element) return;
+    const text = String(value);
+    if (element.textContent === text) return;
+    const hadValue = element.dataset.loaded === "1";
+    element.textContent = text;
+    element.dataset.loaded = "1";
+    if (hadValue) {
+      element.classList.remove("value-flash");
+      void element.offsetWidth;
+      element.classList.add("value-flash");
+    }
+  }
+
+  function emptyState(title, text = "", variant = "") {
+    return `
+      <div class="empty-state ${variant}">
+        <span class="empty-state-icon" aria-hidden="true"></span>
+        <span class="empty-state-title">${escapeHtml(title)}</span>
+        ${text ? `<span class="empty-state-text">${escapeHtml(text)}</span>` : ""}
+      </div>`;
+  }
+
+  function emptyRow(colspan, title, text = "", variant = "") {
+    return `<tr><td colspan="${colspan}" class="empty-cell">${emptyState(title, text, variant)}</td></tr>`;
+  }
+
+  function carPlate(number) {
+    return `<span class="car-number-badge">${escapeHtml(number ?? "—")}</span>`;
+  }
+
+  function markLoaded(id) {
+    const element = $(id);
+    if (element) element.removeAttribute("aria-busy");
+  }
+
+  // ==========================================================================
+  // Notificaciones
+  // ==========================================================================
   function showToast(message, type = "info") {
-    const container = document.getElementById("toast-container");
+    const container = $("toast-container");
     const toast = document.createElement("div");
     toast.className = `toast ${type}`;
-    
-    let icon = "ℹ️";
-    if (type === "success") icon = "✅";
-    if (type === "error") icon = "❌";
+    if (type === "error") toast.setAttribute("role", "alert");
 
-    const iconElement = document.createElement("span");
-    iconElement.textContent = icon;
-    const messageElement = document.createElement("span");
-    messageElement.textContent = String(message);
-    toast.append(iconElement, messageElement);
+    const icon = document.createElement("span");
+    icon.className = "toast-icon";
+    icon.setAttribute("aria-hidden", "true");
+    icon.textContent = type === "success" ? "✓" : (type === "error" ? "!" : "i");
+    const text = document.createElement("span");
+    text.textContent = String(message || "");
+    toast.append(icon, text);
     container.appendChild(toast);
 
-    setTimeout(() => {
-      toast.style.opacity = "0";
-      toast.style.transform = "translateX(100%)";
+    const dismiss = () => {
+      toast.classList.add("leaving");
       setTimeout(() => toast.remove(), 300);
-    }, 4000);
+    };
+    toast.addEventListener("click", dismiss);
+    setTimeout(dismiss, type === "error" ? 7000 : 4500);
   }
 
-  // --- API Client ---
+  // ==========================================================================
+  // Cliente de la API con estado de conexión
+  // ==========================================================================
+  let connectionOk = true;
+
+  function setConnection(ok, message = "") {
+    const banner = $("connection-banner");
+    $("panel-link").classList.toggle("lost", !ok);
+    $("panel-link-text").textContent = ok ? "Conectado" : "Sin conexión";
+    if (ok) {
+      banner.hidden = true;
+    } else {
+      banner.textContent = message;
+      banner.hidden = false;
+    }
+    connectionOk = ok;
+  }
+
+  async function apiRequest(endpoint, options = {}) {
+    const headers = { ...(options.headers || {}) };
+    if (panelToken) headers["X-Admin-Token"] = panelToken;
+    let response;
+    try {
+      response = await fetch(endpoint, { ...options, headers, cache: "no-store" });
+    } catch (error) {
+      setConnection(false, "Sin conexión con el panel. Comprueba que ACC_AdminPanel sigue abierto; reintentando…");
+      return { ok: false, status: 0, data: null };
+    }
+    if (response.status === 401) {
+      setConnection(false, "Acceso no autorizado: abre el panel con el enlace que se abre al iniciarlo (incluye el token).");
+    } else if (!connectionOk) {
+      setConnection(true);
+    }
+    let data = null;
+    try {
+      data = await response.json();
+    } catch {
+      data = null;
+    }
+    return { ok: response.ok, status: response.status, data };
+  }
+
   async function apiGet(endpoint) {
+    const result = await apiRequest(endpoint);
+    return result.ok ? result.data : null;
+  }
+
+  async function apiPost(endpoint, body = {}) {
+    const result = await apiRequest(endpoint, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body)
+    });
+    if (result.data && typeof result.data === "object") {
+      if (result.data.success === undefined) result.data.success = result.ok;
+      return result.data;
+    }
+    return { success: false, message: result.status ? `Error HTTP ${result.status}` : "Sin conexión con el panel." };
+  }
+
+  // Bloquea el botón mientras dura la acción: evita dobles clics y muestra un spinner.
+  async function withBusy(button, action) {
+    if (!button || button.classList.contains("is-busy")) return undefined;
+    button.classList.add("is-busy");
+    button.setAttribute("aria-busy", "true");
+    const wasDisabled = button.disabled;
+    button.disabled = true;
     try {
-      const res = await fetch(endpoint, { headers: panelToken ? { "X-Admin-Token": panelToken } : {} });
-      if (res.status === 401 && !authorizationWarningShown) {
-        authorizationWarningShown = true;
-        showToast("Acceso no autorizado. Reinicia el panel y usa el enlace mostrado en la consola.", "error");
-      }
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      return await res.json();
-    } catch (err) {
-      console.error(`Error en GET ${endpoint}:`, err);
-      return null;
+      return await action();
+    } finally {
+      button.classList.remove("is-busy");
+      button.removeAttribute("aria-busy");
+      button.disabled = wasDisabled;
+      updateServerButtons();
     }
   }
 
-  async function apiPost(endpoint, data = {}) {
-    try {
-      const res = await fetch(endpoint, {
-        method: "POST",
-        headers: { "Content-Type": "application/json", ...(panelToken ? { "X-Admin-Token": panelToken } : {}) },
-        body: JSON.stringify(data)
-      });
-      return await res.json();
-    } catch (err) {
-      console.error(`Error en POST ${endpoint}:`, err);
-      return { success: false, message: err.message };
-    }
+  // ==========================================================================
+  // 1. Estado del servidor (/api/status)
+  // ==========================================================================
+  function updateServerButtons() {
+    const busy = id => $(id).classList.contains("is-busy");
+    if (!busy("btn-start")) $("btn-start").disabled = appState.isRunning || appState.unmanaged;
+    if (!busy("btn-stop")) $("btn-stop").disabled = !appState.isRunning;
+    if (!busy("btn-restart")) $("btn-restart").disabled = !appState.isRunning;
   }
 
-  // --- 1. Sincronización del Estado del Servidor (/api/status) ---
   async function syncServerStatus() {
     const data = await apiGet("/api/status");
     if (!data) return;
 
-    appState.isRunning = data.is_running;
-    appState.autoRotation = data.auto_rotation;
-    appState.currentTrack = data.track_name;
+    appState.isRunning = Boolean(data.is_running);
+    appState.unmanaged = Boolean(data.unmanaged_acc_detected);
 
-    // Header Badge
-    const statusBadge = document.getElementById("server-status-badge");
-    const statusText = document.getElementById("server-status-text");
-    if (data.is_running) {
-      statusBadge.className = "status-indicator-badge online";
-      statusText.textContent = "ONLINE";
-    } else {
-      statusBadge.className = "status-indicator-badge offline";
-      statusText.textContent = "OFFLINE";
-    }
+    const lights = $("server-status-badge");
+    const state = appState.isRunning ? "online" : (appState.unmanaged ? "unmanaged" : "offline");
+    lights.className = `start-lights ${state}`;
+    $("server-status-text").textContent = { online: "ONLINE", unmanaged: "EXTERNO", offline: "OFFLINE" }[state];
+    $("server-status-sub").textContent = {
+      online: `PID ${data.pid}`,
+      unmanaged: "accServer no gestionado",
+      offline: "accServer detenido"
+    }[state];
+    updateServerButtons();
 
-    // Uptime
-    document.getElementById("server-uptime-val").textContent = formatUptime(data.uptime_seconds);
+    $("server-uptime-val").textContent = formatUptime(data.uptime_seconds);
+    $("net-udp-port").textContent = data.udp_port ?? "—";
+    $("net-tcp-port").textContent = data.tcp_port ?? "—";
 
-    // KPI Cards
-    document.getElementById("kpi-server-state").textContent = data.is_running ? "ONLINE" : "OFFLINE";
-    document.getElementById("kpi-server-state").style.color = data.is_running ? "var(--accent-green)" : "var(--accent-red)";
-    document.getElementById("kpi-server-pid").textContent = data.pid ? `PID: ${data.pid}` : "PID: —";
-    document.getElementById("kpi-status-message").textContent = data.status_message || "En espera";
+    const stateValue = $("kpi-server-state");
+    setText("kpi-server-state", appState.isRunning ? "ONLINE" : (appState.unmanaged ? "EXTERNO" : "OFFLINE"));
+    stateValue.classList.toggle("is-online", appState.isRunning);
+    stateValue.classList.toggle("is-offline", !appState.isRunning);
+    setText("kpi-server-pid", data.pid ? `PID ${data.pid}` : "PID —");
+    setText("kpi-status-message", data.status_message || "En espera");
+    $("kpi-status-message").title = data.status_message || "";
 
-    document.getElementById("kpi-track-name").textContent = data.track_name || "—";
-    document.getElementById("kpi-track-file").textContent = data.current_track_file || "cfg/event.json";
-    document.getElementById("kpi-server-room-name").textContent = data.server_name || "ACC Dedicated Server";
-    document.getElementById("kpi-max-slots").textContent = `${data.max_car_slots ?? "—"} SLOTS`;
-    document.getElementById("kpi-max-connections").textContent = `Max Conx: ${data.max_connections ?? "—"}`;
-    document.getElementById("net-udp-port").textContent = data.udp_port ?? "—";
-    document.getElementById("net-tcp-port").textContent = data.tcp_port ?? "—";
-    document.getElementById("kpi-race-locked").textContent =
-      data.is_race_locked === 1 ? "Bloqueado" : (data.is_race_locked === 0 ? "Abierto" : "—");
-
+    setText("kpi-track-name", data.track_display_name || data.track_name || "—");
+    $("kpi-track-name").title = data.track_display_name || "";
+    setText("kpi-track-file", data.current_track_file || "cfg/event.json");
     const weather = data.weather || {};
-    const percent = value => (typeof value === "number" ? `${Math.round(value * 100)}%` : "—");
-    document.getElementById("kpi-track-weather").textContent =
-      `Temp: ${weather.ambient_temp ?? "—"}°C | Nubes: ${percent(weather.cloud_level)} | Lluvia: ${percent(weather.rain)}`;
+    setText("kpi-track-weather", `Temp ${weather.ambient_temp ?? "—"}°C · Nubes ${percent(weather.cloud_level)} · Lluvia ${percent(weather.rain)}`);
 
-    // Render Sessions Pill
-    const sessionsContainer = document.getElementById("kpi-sessions-container");
-    if (data.sessions && data.sessions.length > 0) {
-      sessionsContainer.innerHTML = data.sessions.map(s => {
-        const type = sessionClass(s.sessionType);
-        return `<span class="session-pill ${type}">${escapeHtml(s.sessionType)}: ${escapeHtml(s.sessionDurationMinutes)}m</span>`;
-      }).join("");
-    }
+    const sessionsContainer = $("kpi-sessions-container");
+    const sessions = Array.isArray(data.sessions) ? data.sessions : [];
+    sessionsContainer.innerHTML = sessions.length
+      ? sessions.map(s => `<span class="session-pill ${sessionClass(s.sessionType)}">${escapeHtml(s.sessionType)} · ${escapeHtml(s.sessionDurationMinutes)}′</span>`).join("")
+      : `<span class="kpi-sub-val">Sin sesiones en event.json</span>`;
+    setText("kpi-race-locked", data.is_race_locked === 1 ? "Bloqueado" : (data.is_race_locked === 0 ? "Abierto" : "—"));
 
-    // Auto-Rotation Switch
-    const autoRotToggle = document.getElementById("auto-rotation-toggle");
-    const autoRotBadge = document.getElementById("auto-rotation-status-badge");
-    autoRotToggle.checked = data.auto_rotation;
-    if (data.auto_rotation) {
-      autoRotBadge.textContent = "ACTIVA";
-      autoRotBadge.className = "toggle-status";
-    } else {
-      autoRotBadge.textContent = "PAUSADA";
-      autoRotBadge.className = "toggle-status paused";
-    }
+    setText("kpi-max-slots", `${data.max_car_slots ?? "—"} SLOTS`);
+    setText("kpi-max-connections", `Max conexiones: ${data.max_connections ?? "—"}`);
+    setText("kpi-server-room-name", data.server_name || "ACC Dedicated Server");
+    $("kpi-server-room-name").title = data.server_name || "";
+
+    if (!appState.rotationRequestPending) renderAutoRotation(Boolean(data.auto_rotation));
   }
 
-  // --- 2. Carga y Renderizado del Catálogo de Pistas y DLCs (/api/tracks) ---
+  function renderAutoRotation(enabled) {
+    $("auto-rotation-toggle").checked = enabled;
+    const badge = $("auto-rotation-status-badge");
+    badge.textContent = enabled ? "ACTIVA" : "PAUSADA";
+    badge.className = `toggle-status${enabled ? "" : " paused"}`;
+  }
+
+  // ==========================================================================
+  // 2. Catálogo de circuitos y rotación (/api/tracks)
+  // ==========================================================================
   async function loadTracksPool() {
     const data = await apiGet("/api/tracks");
-    if (!data) return;
-
-    appState.tracksList = data.tracks || [];
-    appState.categories = data.categories || [];
-    appState.activeDlcs = data.active_dlcs || [];
-    appState.disabledTracks = data.disabled_tracks || [];
-
-    // 1. Contador Global de Rotación
-    const counterEl = document.getElementById("rotation-active-count");
-    if (counterEl) {
-      counterEl.textContent = `${data.active_rotation_count !== undefined ? data.active_rotation_count : (data.rotation_pool ? data.rotation_pool.length : 0)} / ${data.total_tracks_count || 25}`;
-    }
-
-    // Actualizar estado visual de botones de presets
-    const btnAll = document.getElementById("btn-preset-all");
-    const btnBase = document.getElementById("btn-preset-base");
-    const btnDlc = document.getElementById("btn-preset-dlc");
-    if (btnAll && btnBase && btnDlc) {
-      btnAll.classList.remove("active");
-      btnBase.classList.remove("active");
-      btnDlc.classList.remove("active");
-
-      const activeDlcs = data.active_dlcs || [];
-      const disabledTracks = data.disabled_tracks || [];
-      if (activeDlcs.length === 8 && disabledTracks.length === 0) {
-        btnAll.classList.add("active");
-      } else if (activeDlcs.length === 1 && activeDlcs.includes("base") && disabledTracks.length === 0) {
-        btnBase.classList.add("active");
-      } else if (activeDlcs.length === 7 && !activeDlcs.includes("base") && disabledTracks.length === 0) {
-        btnDlc.classList.add("active");
+    if (!data) {
+      if ($("categories-tracks-container").getAttribute("aria-busy")) {
+        $("categories-tracks-container").innerHTML = emptyState("No se pudo cargar el catálogo", "Se reintentará al volver a abrir la pestaña.", "error");
       }
+      return;
     }
+    const categories = data.categories || [];
+    const activeDlcs = data.active_dlcs || [];
+    const disabledTracks = data.disabled_tracks || [];
 
-    // 2. Poblar Selector Rápido del Banner con <optgroup> por DLC
-    const selectDirect = document.getElementById("select-direct-track");
-    if (selectDirect) {
-      const currentVal = selectDirect.value;
-      if (data.categories && data.categories.length > 0) {
-        selectDirect.innerHTML = data.categories.map(cat => {
-          const options = cat.tracks.map(t => {
-            const isSel = (t.filename === (currentVal || data.current_track_file));
-            return `<option value="${escapeHtml(t.filename)}" ${isSel ? 'selected' : ''}>${escapeHtml(t.display_name)} (${escapeHtml(t.filename)})</option>`;
-          }).join("");
-          return `<optgroup label="${escapeHtml(cat.name)} (${cat.tracks.length} circuitos)">${options}</optgroup>`;
-        }).join("");
-      } else {
-        selectDirect.innerHTML = (data.tracks || []).map(t => {
-          return `<option value="${escapeHtml(t.filename)}">${escapeHtml(t.display_name || t.track_name)} (${escapeHtml(t.filename)})</option>`;
-        }).join("");
-      }
-    }
+    $("rotation-active-count").textContent = `${data.active_rotation_count ?? (data.rotation_pool || []).length} / ${data.total_tracks_count ?? "—"}`;
 
-    // 3. Renderizar Chips Maestros de DLCs
-    const chipsContainer = document.getElementById("dlc-chips-container");
-    if (chipsContainer && data.categories) {
-      chipsContainer.innerHTML = data.categories.map(cat => {
-        const isAct = cat.is_active;
-        return `
-          <div class="dlc-chip-card ${isAct ? 'active' : 'inactive'}">
-            <div class="dlc-chip-info">
-              <span class="dlc-chip-name">${escapeHtml(cat.name)}</span>
-              <div class="dlc-chip-meta">
-                <span class="dlc-chip-count">${cat.active_tracks_count}/${cat.total_tracks} activos</span>
-                <span>${cat.tracks.length} pistas</span>
-              </div>
-            </div>
-            <label class="switch switch-sm" title="Activar/desactivar ${escapeHtml(cat.name)} en rotación">
-              <input type="checkbox" ${isAct ? 'checked' : ''} data-action="toggle-dlc" data-dlc-id="${escapeHtml(cat.id)}">
-              <span class="slider round"></span>
-            </label>
+    const presetState = {
+      "btn-preset-all": activeDlcs.length === categories.length && disabledTracks.length === 0,
+      "btn-preset-base": activeDlcs.length === 1 && activeDlcs.includes("base") && disabledTracks.length === 0,
+      "btn-preset-dlc": activeDlcs.length === categories.length - 1 && !activeDlcs.includes("base") && disabledTracks.length === 0
+    };
+    Object.entries(presetState).forEach(([id, active]) => {
+      $(id).classList.toggle("active", active);
+      $(id).setAttribute("aria-pressed", String(active));
+    });
+
+    // Selector rápido agrupado por paquete
+    const select = $("select-direct-track");
+    const previous = select.value;
+    select.innerHTML = categories.map(cat => `
+      <optgroup label="${escapeHtml(cat.name)}">
+        ${cat.tracks.map(t => {
+          const selected = t.filename === (previous || data.current_track_file);
+          return `<option value="${escapeHtml(t.filename)}" ${selected ? "selected" : ""}>${escapeHtml(t.display_name)}${t.filename === data.current_track_file ? " · actual" : ""}</option>`;
+        }).join("")}
+      </optgroup>`).join("");
+
+    $("dlc-chips-container").innerHTML = categories.map(cat => `
+      <div class="dlc-chip-card ${cat.is_active ? "active" : "inactive"}">
+        <div class="dlc-chip-info">
+          <span class="dlc-chip-name" title="${escapeHtml(cat.name)}">${escapeHtml(cat.name)}</span>
+          <div class="dlc-chip-meta">
+            <span class="dlc-chip-count">${cat.active_tracks_count}/${cat.total_tracks}</span>
+            <span>en rotación</span>
           </div>
-        `;
-      }).join("");
-    }
+        </div>
+        <label class="switch switch-sm">
+          <input type="checkbox" role="switch" ${cat.is_active ? "checked" : ""} data-action="toggle-dlc" data-dlc-id="${escapeHtml(cat.id)}" aria-label="Incluir ${escapeHtml(cat.name)} en la rotación">
+          <span class="slider"></span>
+        </label>
+      </div>`).join("");
+    markLoaded("dlc-chips-container");
 
-    // 4. Renderizar Secciones Categorizadas de Circuitos
-    const categoriesContainer = document.getElementById("categories-tracks-container");
-    if (categoriesContainer && data.categories) {
-      categoriesContainer.innerHTML = data.categories.map(cat => {
-        const isBase = (cat.id === "base");
-        const isAct = cat.is_active;
-
-        const trackCardsHtml = cat.tracks.map(t => {
-          const isServerCurrent = (t.filename === data.current_track_file || t.is_current);
-          const inRot = t.in_rotation;
-          return `
-            <div class="track-pool-card ${isServerCurrent ? 'active-server-track' : ''} ${!inRot ? 'excluded-from-rotation' : ''}">
-              <div class="track-card-top">
-                <div class="track-card-header-row">
-                  <span class="track-card-title">${escapeHtml(t.display_name)}</span>
-                  ${isServerCurrent ? '<span class="track-badge-live">● EN VIVO</span>' : ''}
-                </div>
-                <span class="track-card-code">${escapeHtml(t.filename)}</span>
-              </div>
-
-              <div class="track-weather-grid">
-                <div class="weather-metric"><span>🌡️ Temp:</span> <strong>${t.ambient_temp}°C</strong></div>
-                <div class="weather-metric"><span>🌧️ Lluvia:</span> <strong>${(t.rain * 100).toFixed(0)}%</strong></div>
-                <div class="weather-metric"><span>☁️ Nubes:</span> <strong>${(t.cloud_level * 100).toFixed(0)}%</strong></div>
-                <div class="weather-metric"><span>⏱️ Overtime:</span> <strong>${t.session_over_time_seconds || 120}s</strong></div>
-              </div>
-
-              <div class="track-card-footer">
-                <div class="track-toggle-inline">
-                  <label class="switch switch-sm" title="Incluir ${escapeHtml(t.display_name)} en rotación automática">
-                    <input type="checkbox" ${inRot ? 'checked' : ''} data-action="toggle-track" data-track-file="${escapeHtml(t.filename)}">
-                    <span class="slider round"></span>
-                  </label>
-                  <span class="toggle-label">${inRot ? 'En Rotación' : 'Excluido'}</span>
-                </div>
-
-                <button class="btn btn-sm ${isServerCurrent ? 'btn-success' : 'btn-secondary'}" data-action="select-track" data-track-file="${escapeHtml(t.filename)}">
-                  ${isServerCurrent ? '★ Pista Actual' : 'Cargar Pista'}
-                </button>
-              </div>
-            </div>
-          `;
-        }).join("");
-
+    $("categories-tracks-container").innerHTML = categories.map(cat => {
+      const isBase = cat.id === "base";
+      const cards = cat.tracks.map(t => {
+        const isCurrent = t.filename === data.current_track_file || t.is_current;
         return `
-          <div class="dlc-category-section ${isBase ? 'is-base' : 'is-dlc'} ${isAct ? 'active' : 'inactive'}">
-            <div class="dlc-category-header">
-              <div class="dlc-category-title-group">
-                <span class="dlc-category-title">${escapeHtml(cat.name)}</span>
-                <span class="dlc-badge ${isBase ? 'base' : 'dlc'}">${isBase ? 'Juego Base' : 'Expansión DLC'}</span>
-                <span class="dlc-category-desc">${escapeHtml(cat.description)}</span>
+          <article class="track-pool-card ${isCurrent ? "active-server-track" : ""} ${t.in_rotation ? "" : "excluded-from-rotation"}">
+            <div class="track-card-top">
+              <div class="track-card-header-row">
+                <h5 class="track-card-title">${escapeHtml(t.display_name)}</h5>
+                ${isCurrent ? '<span class="track-badge-live">EN PISTA</span>' : ""}
               </div>
-
-              <div class="dlc-category-actions">
-                <span class="dlc-category-count-badge">${cat.active_tracks_count} de ${cat.total_tracks} en rotación</span>
-                <label class="switch" title="Activar/desactivar todos los circuitos de ${escapeHtml(cat.name)}">
-                  <input type="checkbox" ${isAct ? 'checked' : ''} data-action="toggle-dlc" data-dlc-id="${escapeHtml(cat.id)}">
-                  <span class="slider round"></span>
+              <span class="track-card-code">${escapeHtml(t.filename)}</span>
+            </div>
+            <div class="track-weather-grid">
+              <div class="weather-metric"><span>Temp</span><strong>${escapeHtml(t.ambient_temp)}°C</strong></div>
+              <div class="weather-metric"><span>Lluvia</span><strong>${percent(t.rain)}</strong></div>
+              <div class="weather-metric"><span>Nubes</span><strong>${percent(t.cloud_level)}</strong></div>
+              <div class="weather-metric"><span>Overtime</span><strong>${escapeHtml(t.session_over_time_seconds ?? 120)} s</strong></div>
+            </div>
+            <div class="track-card-footer">
+              <div class="track-toggle-inline">
+                <label class="switch switch-sm">
+                  <input type="checkbox" role="switch" ${t.in_rotation ? "checked" : ""} ${cat.is_active ? "" : "disabled"} data-action="toggle-track" data-track-file="${escapeHtml(t.filename)}" aria-label="Incluir ${escapeHtml(t.display_name)} en la rotación">
+                  <span class="slider"></span>
                 </label>
+                <span class="toggle-label">${t.in_rotation ? "En rotación" : "Excluido"}</span>
               </div>
+              <button type="button" class="btn btn-sm ${isCurrent ? "btn-success" : "btn-secondary"}" data-action="select-track" data-track-file="${escapeHtml(t.filename)}" ${isCurrent ? 'aria-current="true"' : ""}>
+                ${isCurrent ? "Pista actual" : "Cargar pista"}
+              </button>
             </div>
+          </article>`;
+      }).join("");
 
-            <div class="tracks-cards-grid">
-              ${trackCardsHtml}
+      return `
+        <section class="dlc-category-section ${isBase ? "is-base" : "is-dlc"} ${cat.is_active ? "active" : "inactive"}" aria-label="${escapeHtml(cat.name)}">
+          <div class="dlc-category-header">
+            <div class="dlc-category-title-group">
+              <h4 class="dlc-category-title">${escapeHtml(cat.name)}</h4>
+              <span class="dlc-badge ${isBase ? "base" : "dlc"}">${isBase ? "Juego base" : "DLC"}</span>
+              <span class="dlc-category-desc">${escapeHtml(cat.description)}</span>
+            </div>
+            <div class="dlc-category-actions">
+              <span class="dlc-category-count-badge">${cat.active_tracks_count} de ${cat.total_tracks} en rotación</span>
+              <label class="switch">
+                <input type="checkbox" role="switch" ${cat.is_active ? "checked" : ""} data-action="toggle-dlc" data-dlc-id="${escapeHtml(cat.id)}" aria-label="Incluir todo ${escapeHtml(cat.name)} en la rotación">
+                <span class="slider"></span>
+              </label>
             </div>
           </div>
-        `;
-      }).join("");
-    }
+          <div class="tracks-cards-grid">${cards}</div>
+        </section>`;
+    }).join("");
+    markLoaded("categories-tracks-container");
   }
 
-  // Handlers Globales de Rotación y DLCs
-  window.toggleDlc = async (dlcId, enabled) => {
-    const res = await apiPost("/api/rotation/dlc-toggle", { dlc_id: dlcId, enabled: enabled });
-    if (res.success) {
-      showToast(res.message, "success");
-      syncServerStatus();
-      loadTracksPool();
-    } else {
-      showToast(res.message || "Error al actualizar DLC.", "error");
-      loadTracksPool();
-    }
-  };
+  async function runRotationChange(endpoint, body, control) {
+    if (control) control.disabled = true;
+    const res = await apiPost(endpoint, body);
+    showToast(res.message || "No se pudo actualizar la rotación.", res.success ? "success" : "error");
+    await Promise.all([syncServerStatus(), loadTracksPool()]);
+  }
 
-  window.toggleTrackRotation = async (trackFile, enabled) => {
-    const res = await apiPost("/api/rotation/track-toggle", { track_file: trackFile, enabled: enabled });
-    if (res.success) {
-      showToast(res.message, "info");
-      syncServerStatus();
-      loadTracksPool();
-    } else {
-      showToast(res.message || "Error al cambiar estado de pista.", "error");
-      loadTracksPool();
-    }
-  };
+  async function changeTrack(filename, button) {
+    if (!filename) return;
+    if (appState.isRunning && !confirm(`Cargar ${filename} reinicia accServer y desconecta a los pilotos. ¿Continuar?`)) return;
+    await withBusy(button, async () => {
+      showToast(`Cargando ${filename}…`, "info");
+      const res = await apiPost("/api/rotation/select", { track_file: filename });
+      showToast(res.message, res.success ? "success" : "error");
+      await Promise.all([syncServerStatus(), loadTracksPool()]);
+    });
+  }
 
-  window.applyRotationPreset = async (preset) => {
-    const res = await apiPost("/api/rotation/preset", { preset: preset });
-    if (res.success) {
-      showToast(res.message, "success");
-      syncServerStatus();
-      loadTracksPool();
-    } else {
-      showToast(res.message || "Error al aplicar preset.", "error");
-    }
-  };
-
-  // Helper global para seleccionar pista desde las tarjetas
-  window.selectTrackDirect = async (filename) => {
-    const res = await apiPost("/api/rotation/select", { track_file: filename });
-    if (res.success) {
-      showToast(res.message, "success");
-      syncServerStatus();
-      loadTracksPool();
-    } else {
-      showToast(res.message, "error");
-    }
-  };
-
-  // --- 3. Telemetría y Leaderboard (/api/telemetry) ---
+  // ==========================================================================
+  // 3. Telemetría (/api/telemetry)
+  // ==========================================================================
   async function loadTelemetry() {
     const data = await apiGet("/api/telemetry");
-    if (!data) return;
+    if (!data) {
+      $("track-records-container").innerHTML = emptyState("No se pudo cargar la telemetría", "Se reintentará con «Actualizar».", "error");
+      return;
+    }
 
-    // Récords de Vuelta
-    const recordsContainer = document.getElementById("track-records-container");
-    const tracksObj = data.track_records || {};
-    const trackKeys = Object.keys(tracksObj);
-
-    if (trackKeys.length === 0) {
-      recordsContainer.innerHTML = `<div class="loading-state">No hay récords registrados aún. Se generan al completar vueltas.</div>`;
-    } else {
-      recordsContainer.innerHTML = trackKeys.map(track => {
-        const item = tracksObj[track];
-        return `
-          <div class="record-card">
-            <div class="record-card-track">${escapeHtml(track)}</div>
+    const records = Object.entries(data.track_records || {})
+      .map(([track, item]) => ({ track, ...item }))
+      .sort((a, b) => String(a.track_display_name || a.track).localeCompare(String(b.track_display_name || b.track)));
+    $("track-records-container").innerHTML = records.length
+      ? records.map((item, index) => `
+          <article class="record-card" style="animation-delay: ${Math.min(index * 40, 400)}ms">
+            <div class="record-card-track" title="${escapeHtml(item.track_display_name || item.track)}">${escapeHtml(item.track_display_name || item.track)}</div>
             <div class="record-card-time">${formatLapTime(item.time_ms)}</div>
-            <div class="record-card-driver">Piloto: <strong>${escapeHtml(item.driver)}</strong> (Coche #${escapeHtml(item.car_num)})</div>
-          </div>
-        `;
-      }).join("");
-    }
+            <div class="record-card-driver">${carPlate(item.car_num)}<strong>${escapeHtml(item.driver)}</strong></div>
+          </article>`).join("")
+      : emptyState("Sin récords todavía", "Aparecerán cuando se complete una vuelta válida en cualquier sesión.");
+    markLoaded("track-records-container");
 
-    // Ranking de Pilotos
-    const tbody = document.getElementById("drivers-ranking-tbody");
-    const driversObj = data.drivers || {};
-    const driverNames = Object.keys(driversObj);
+    const drivers = Object.entries(data.drivers || {}).sort(([, a], [, b]) =>
+      (b.wins - a.wins) || (b.podiums - a.podiums) || (b.races - a.races) || (b.total_laps - a.total_laps));
+    const shown = drivers.slice(0, RANKING_LIMIT);
+    $("drivers-ranking-tbody").innerHTML = shown.length
+      ? shown.map(([name, stats], index) => {
+          const position = index + 1;
+          const podiumClass = position <= 3 && stats.wins + stats.podiums > 0 ? `p${position}` : "";
+          return `
+            <tr>
+              <td><span class="pos-badge ${podiumClass}"><span>P${position}</span></span></td>
+              <td class="driver-pill">${escapeHtml(name)}</td>
+              <td class="text-center num win-count">${escapeHtml(stats.wins)}</td>
+              <td class="text-center num podium-count">${escapeHtml(stats.podiums)}</td>
+              <td class="text-center num">${escapeHtml(stats.races)}</td>
+              <td class="text-center num">${escapeHtml(stats.total_laps)}</td>
+            </tr>`;
+        }).join("")
+      : emptyRow(6, "Sin pilotos registrados", "La clasificación se construye con los resultados de carrera.");
+    $("drivers-ranking-footnote").textContent = drivers.length > RANKING_LIMIT
+      ? `Mostrando los ${RANKING_LIMIT} primeros de ${drivers.length} pilotos.` : "";
 
-    if (driverNames.length === 0) {
-      tbody.innerHTML = `<tr><td colspan="5" class="text-center">No hay registros de pilotos aún.</td></tr>`;
-    } else {
-      // Ordenar por Victorias descendente, luego podios
-      driverNames.sort((a, b) => {
-        const diffWins = driversObj[b].wins - driversObj[a].wins;
-        if (diffWins !== 0) return diffWins;
-        return driversObj[b].podiums - driversObj[a].podiums;
-      });
-
-      tbody.innerHTML = driverNames.map(name => {
-        const stats = driversObj[name];
-        return `
-          <tr>
-            <td class="driver-pill">${escapeHtml(name)}</td>
-            <td class="text-center win-count">${escapeHtml(stats.wins)}</td>
-            <td class="text-center podium-count">${escapeHtml(stats.podiums)}</td>
-            <td class="text-center">${escapeHtml(stats.races)}</td>
-            <td class="text-center">${escapeHtml(stats.total_laps)}</td>
-          </tr>
-        `;
-      }).join("");
-    }
-
-    // Últimas Sesiones
-    const sessionsList = document.getElementById("recent-sessions-list");
-    const recent = data.recent_sessions || [];
-
-    if (recent.length === 0) {
-      sessionsList.innerHTML = `<div class="loading-state">No hay sesiones en results/.</div>`;
-    } else {
-      sessionsList.innerHTML = recent.slice(0, 8).map(s => {
-        const winner = s.leaderboard.length > 0 ? s.leaderboard[0] : null;
-        const winnerText = winner ? `${escapeHtml(winner.driver)} (#${escapeHtml(winner.car_num)})` : "Sin tiempos";
-        const bestTime = winner ? formatLapTime(winner.best_lap_ms) : "—";
-        return `
-          <div class="session-item-card">
-            <div>
+    const sessions = (data.recent_sessions || []).slice(0, SESSIONS_LIMIT);
+    $("recent-sessions-list").innerHTML = sessions.length
+      ? sessions.map(s => {
+          const winner = s.leaderboard && s.leaderboard.length ? s.leaderboard[0] : null;
+          const laps = (s.leaderboard || []).map(line => line.best_lap_ms).filter(ms => ms > 0 && ms < 2147483647);
+          const fastest = laps.length ? Math.min(...laps) : 0;
+          return `
+            <div class="session-item-card">
               <span class="session-badge ${sessionClass(s.session_type)}">${escapeHtml(s.session_type)}</span>
-              <strong style="margin-left: 0.5rem; color: #fff;">${escapeHtml(String(s.track_name || "").toUpperCase())}</strong>
-              <div style="font-size: 0.8rem; color: var(--text-muted); margin-top: 0.2rem;">
-                Ganador: <span style="color: var(--text-secondary);">${winnerText}</span> | Mejor Vuelta: <span style="color: var(--accent-cyan);">${bestTime}</span>
+              <div>
+                <div class="session-track">${escapeHtml(s.track_display_name || s.track_name)}</div>
+                <div class="session-meta">
+                  ${winner ? `P1 <strong>${escapeHtml(winner.driver)}</strong> (#${escapeHtml(winner.car_num)})` : "Sin clasificados"}
+                  · ${escapeHtml(s.total_drivers)} pilotos
+                  · Vuelta rápida <span class="session-best">${formatLapTime(fastest)}</span>
+                </div>
               </div>
-            </div>
-            <span class="badge-tag">${escapeHtml(s.filename)}</span>
-          </div>
-        `;
-      }).join("");
-    }
+              <span class="session-when" title="${escapeHtml(s.filename)}">${escapeHtml(formatResultDate(s.filename))}</span>
+            </div>`;
+        }).join("")
+      : emptyState("Sin sesiones en results/", "ACC escribe un archivo al terminar cada sesión (dumpLeaderboards = 1).");
+    markLoaded("recent-sessions-list");
   }
 
-  // --- 4. Configuración en Caliente (/api/config) ---
+  // ==========================================================================
+  // 4. Configuración (/api/config)
+  // ==========================================================================
   async function loadConfigData() {
     const data = await apiGet("/api/config");
-    if (!data) return;
+    if (!data) {
+      showToast("No se pudo cargar la configuración.", "error");
+      return;
+    }
     appState.configData = data;
-
     const s = data.settings || {};
     const e = data.event || {};
     const a = data.assistRules || {};
-
-    // Parámetros de servidor (las contraseñas no se reciben: vacío = conservar la actual)
     const secretsSet = data.secrets_set || {};
-    document.getElementById("cfg-server-name").value = s.serverName || "";
-    document.getElementById("cfg-admin-password").value = "";
-    document.getElementById("cfg-admin-password").placeholder = secretsSet.adminPassword ? "•••••••• (sin cambios)" : "Obligatoria";
-    document.getElementById("cfg-server-password").value = "";
-    document.getElementById("cfg-server-password").placeholder = secretsSet.password ? "•••••••• (sin cambios)" : "Sala pública (sin contraseña)";
-    document.getElementById("cfg-clear-server-password").checked = false;
-    document.getElementById("cfg-max-slots").value = s.maxCarSlots || 24;
-    document.getElementById("cfg-is-race-locked").value = s.isRaceLocked !== undefined ? s.isRaceLocked : 1;
-    document.getElementById("cfg-car-group").value = s.carGroup || "FreeForAll";
 
-    // Duraciones
+    $("cfg-server-name").value = s.serverName || "";
+    $("cfg-admin-password").value = "";
+    $("cfg-admin-password").placeholder = secretsSet.adminPassword ? "•••••••• (sin cambios)" : "Obligatoria";
+    $("cfg-server-password").value = "";
+    $("cfg-server-password").placeholder = secretsSet.password ? "•••••••• (sin cambios)" : "Sala pública (sin contraseña)";
+    $("cfg-clear-server-password").checked = false;
+    $("cfg-max-slots").value = s.maxCarSlots ?? 24;
+    $("cfg-is-race-locked").value = s.isRaceLocked ?? 1;
+    $("cfg-car-group").value = s.carGroup || "FreeForAll";
+
     const sessions = e.sessions || [];
-    const fp = sessions.find(x => x.sessionType === "P" || x.sessionType === "FP");
-    const q = sessions.find(x => x.sessionType === "Q");
-    const r = sessions.find(x => x.sessionType === "R");
+    const practice = sessions.find(x => x.sessionType === "P" || x.sessionType === "FP");
+    const qualifying = sessions.find(x => x.sessionType === "Q");
+    const race = sessions.find(x => x.sessionType === "R");
+    if (practice) $("cfg-duration-fp").value = practice.sessionDurationMinutes;
+    if (qualifying) $("cfg-duration-q").value = qualifying.sessionDurationMinutes;
+    if (race) $("cfg-duration-r").value = race.sessionDurationMinutes;
 
-    if (fp) document.getElementById("cfg-duration-fp").value = fp.sessionDurationMinutes;
-    if (q) document.getElementById("cfg-duration-q").value = q.sessionDurationMinutes;
-    if (r) document.getElementById("cfg-duration-r").value = r.sessionDurationMinutes;
-
-    // Clima
-    document.getElementById("cfg-ambient-temp").value = e.ambientTemp !== undefined ? e.ambientTemp : 25;
-    document.getElementById("cfg-cloud-level").value = e.cloudLevel !== undefined ? e.cloudLevel : 0.1;
-    document.getElementById("cfg-rain").value = e.rain !== undefined ? e.rain : 0.0;
-    document.getElementById("cfg-weather-random").value = e.weatherRandomness !== undefined ? e.weatherRandomness : 1;
-
-    // Ayudas
-    document.getElementById("cfg-stability-control").value = a.stabilityControlLevelMax !== undefined ? a.stabilityControlLevelMax : 100;
-    document.getElementById("cfg-disable-ideal-line").value = a.disableIdealLine !== undefined ? a.disableIdealLine : 0;
+    $("cfg-ambient-temp").value = e.ambientTemp ?? 25;
+    $("cfg-cloud-level").value = e.cloudLevel ?? 0.1;
+    $("cfg-rain").value = e.rain ?? 0;
+    $("cfg-weather-random").value = e.weatherRandomness ?? 1;
+    $("cfg-stability-control").value = a.stabilityControlLevelMax ?? 100;
+    $("cfg-disable-ideal-line").value = a.disableIdealLine ?? 0;
   }
 
-  // Guardar Configuración
-  document.getElementById("config-form").addEventListener("submit", async (ev) => {
+  $("config-form").addEventListener("submit", async (ev) => {
     ev.preventDefault();
-
+    const form = ev.currentTarget;
     if (!appState.configData) {
-      showToast("Error: Los datos base de configuración no están listos.", "error");
+      showToast("La configuración aún no se ha cargado.", "error");
       return;
     }
+    form.classList.add("was-validated");
+    if (!form.reportValidity()) return;
 
-    const s = appState.configData.settings || {};
-    const e = appState.configData.event || {};
-    const a = appState.configData.assistRules || {};
-    const c = appState.configData.configuration || {};
+    const s = { ...(appState.configData.settings || {}) };
+    const e = JSON.parse(JSON.stringify(appState.configData.event || {}));
+    const a = { ...(appState.configData.assistRules || {}) };
+    const c = { ...(appState.configData.configuration || {}) };
 
-    // Actualizar settings: las contraseñas sólo se envían si se escribieron (o si se pide quitar la de acceso)
-    s.serverName = document.getElementById("cfg-server-name").value.trim();
-    delete s.adminPassword;
-    delete s.password;
-    const newAdminPassword = document.getElementById("cfg-admin-password").value.trim();
-    const newServerPassword = document.getElementById("cfg-server-password").value.trim();
+    // Contraseñas: sólo se envían si se escribieron o si se pide quitar la de acceso.
+    s.serverName = $("cfg-server-name").value.trim();
+    const newAdminPassword = $("cfg-admin-password").value.trim();
+    const newServerPassword = $("cfg-server-password").value.trim();
     if (newAdminPassword) s.adminPassword = newAdminPassword;
-    if (document.getElementById("cfg-clear-server-password").checked) s.password = "";
+    if ($("cfg-clear-server-password").checked) s.password = "";
     else if (newServerPassword) s.password = newServerPassword;
-    s.maxCarSlots = parseInt(document.getElementById("cfg-max-slots").value, 10);
-    s.isRaceLocked = parseInt(document.getElementById("cfg-is-race-locked").value, 10);
-    s.carGroup = document.getElementById("cfg-car-group").value;
+    s.maxCarSlots = parseInt($("cfg-max-slots").value, 10);
+    s.isRaceLocked = parseInt($("cfg-is-race-locked").value, 10);
+    s.carGroup = $("cfg-car-group").value;
     s.dumpLeaderboards = 1;
     s.configVersion = 1;
 
-    // Actualizar duraciones de sesión
-    const fpMin = parseInt(document.getElementById("cfg-duration-fp").value, 10);
-    const qMin = parseInt(document.getElementById("cfg-duration-q").value, 10);
-    const rMin = parseInt(document.getElementById("cfg-duration-r").value, 10);
-
-    if (e.sessions) {
-      for (const sess of e.sessions) {
-        if (sess.sessionType === "P" || sess.sessionType === "FP") sess.sessionDurationMinutes = fpMin;
-        if (sess.sessionType === "Q") sess.sessionDurationMinutes = qMin;
-        if (sess.sessionType === "R") sess.sessionDurationMinutes = rMin;
-      }
-    }
-
-    // Actualizar clima
-    e.ambientTemp = parseInt(document.getElementById("cfg-ambient-temp").value, 10);
-    e.cloudLevel = parseFloat(document.getElementById("cfg-cloud-level").value);
-    e.rain = parseFloat(document.getElementById("cfg-rain").value);
-    e.weatherRandomness = parseInt(document.getElementById("cfg-weather-random").value, 10);
-
-    // Actualizar asistencias
-    a.stabilityControlLevelMax = parseInt(document.getElementById("cfg-stability-control").value, 10);
-    a.disableIdealLine = parseInt(document.getElementById("cfg-disable-ideal-line").value, 10);
-
-    const payload = {
-      settings: s,
-      event: e,
-      assistRules: a,
-      configuration: c
+    const durations = {
+      P: parseInt($("cfg-duration-fp").value, 10),
+      FP: parseInt($("cfg-duration-fp").value, 10),
+      Q: parseInt($("cfg-duration-q").value, 10),
+      R: parseInt($("cfg-duration-r").value, 10)
     };
+    (e.sessions || []).forEach(session => {
+      if (durations[session.sessionType] !== undefined) session.sessionDurationMinutes = durations[session.sessionType];
+    });
+    e.ambientTemp = parseInt($("cfg-ambient-temp").value, 10);
+    e.cloudLevel = parseFloat($("cfg-cloud-level").value);
+    e.rain = parseFloat($("cfg-rain").value);
+    e.weatherRandomness = parseInt($("cfg-weather-random").value, 10);
+    a.stabilityControlLevelMax = parseInt($("cfg-stability-control").value, 10);
+    a.disableIdealLine = parseInt($("cfg-disable-ideal-line").value, 10);
 
-    const res = await apiPost("/api/config", payload);
-    if (res.success) {
-      showToast("¡Configuración guardada exitosamente con codificación UTF-16 LE!", "success");
-      loadConfigData();
-      syncServerStatus();
-    } else {
-      showToast(res.message || "Error al guardar configuración.", "error");
-    }
+    await withBusy($("btn-save-config"), async () => {
+      const res = await apiPost("/api/config", { settings: s, event: e, assistRules: a, configuration: c });
+      if (res.success) {
+        showToast("Configuración guardada en UTF-16 LE. Se aplicará en el próximo arranque.", "success");
+        await Promise.all([loadConfigData(), syncServerStatus()]);
+      } else {
+        showToast(res.message || "No se pudo guardar la configuración.", "error");
+      }
+    });
   });
 
-  // --- 5. Monitor de Logs en Tiempo Real (/api/logs) ---
+  // ==========================================================================
+  // 5. Consola (/api/logs)
+  // ==========================================================================
+  function highlightLogLine(line) {
+    const safe = escapeHtml(line);
+    const withTimestamp = safe.replace(/^(\d+:)/, '<span class="log-ts">$1</span>');
+    if (/==ERR|error/i.test(line)) return `<span class="log-err">${withTimestamp}</span>`;
+    if (/New connection request|Creating new car connection|client\(s\) online|closed the connection|dead connection|no driving connection/.test(line)) {
+      return `<span class="log-conn">${withTimestamp}</span>`;
+    }
+    if (/Session changed|sessionPhase|Server starting|Track .* was set/.test(line)) return `<span class="log-session">${withTimestamp}</span>`;
+    return withTimestamp;
+  }
+
   async function loadLogs() {
-    const lines = document.getElementById("select-log-lines").value;
-    const hideSpam = document.getElementById("toggle-hide-spam").checked ? 1 : 0;
+    const lines = $("select-log-lines").value;
+    const hideSpam = $("toggle-hide-spam").checked ? 1 : 0;
     const data = await apiGet(`/api/logs?lines=${lines}&hide_spam=${hideSpam}`);
     if (!data || !data.logs) return;
 
-    const terminal = document.getElementById("logs-content");
-    const terminalWindow = document.getElementById("logs-terminal-window");
-
-    terminal.textContent = data.logs.join("");
-    document.getElementById("logs-hidden-count").textContent =
-      data.hidden_spam_lines ? `${data.hidden_spam_lines} líneas de spam ocultas` : "";
-
-    if (appState.autoScrollLogs) {
-      terminalWindow.scrollTop = terminalWindow.scrollHeight;
-    }
+    const terminalWindow = $("logs-terminal-window");
+    $("logs-content").innerHTML = data.logs.map(line => highlightLogLine(line.replace(/\n$/, ""))).join("\n");
+    $("logs-hidden-count").textContent = data.hidden_spam_lines ? `${data.hidden_spam_lines} líneas de spam ocultas` : "";
+    if (appState.autoScrollLogs) terminalWindow.scrollTop = terminalWindow.scrollHeight;
   }
 
-  // --- 6. Eventos y Controles de Mandos ---
-  document.getElementById("btn-start").addEventListener("click", async () => {
-    const res = await apiPost("/api/server/start");
-    showToast(res.message, res.success ? "success" : "error");
-    syncServerStatus();
-  });
-
-  document.getElementById("btn-restart").addEventListener("click", async () => {
-    showToast("Reiniciando servidor y liberando sockets...", "info");
-    const res = await apiPost("/api/server/restart");
-    showToast(res.message, res.success ? "success" : "error");
-    syncServerStatus();
-  });
-
-  document.getElementById("btn-stop").addEventListener("click", async () => {
-    if (confirm("¿Seguro que deseas detener el servidor de ACC forzosamente?")) {
-      const res = await apiPost("/api/server/stop");
-      showToast(res.message, res.success ? "success" : "error");
-      syncServerStatus();
-    }
-  });
-
-  document.getElementById("auto-rotation-toggle").addEventListener("change", async (ev) => {
-    const res = await apiPost("/api/rotation/toggle", { enabled: ev.target.checked });
-    showToast(res.message || "No se pudo cambiar la auto-rotación.", res.success ? "info" : "error");
-    syncServerStatus();
-  });
-
-  document.getElementById("btn-skip-track").addEventListener("click", async () => {
-    showToast("Saltando a la siguiente pista del pool...", "info");
-    const res = await apiPost("/api/rotation/skip");
-    showToast(res.message, res.success ? "success" : "error");
-    syncServerStatus();
-    loadTracksPool();
-  });
-
-  document.getElementById("btn-apply-track").addEventListener("click", async () => {
-    const val = document.getElementById("select-direct-track").value;
-    if (!val) return;
-    showToast(`Cambiando pista a ${val}...`, "info");
-    const res = await apiPost("/api/rotation/select", { track_file: val });
-    showToast(res.message, res.success ? "success" : "error");
-    syncServerStatus();
-    loadTracksPool();
-  });
-
-  const pAll = document.getElementById("btn-preset-all");
-  const pBase = document.getElementById("btn-preset-base");
-  const pDlc = document.getElementById("btn-preset-dlc");
-  if (pAll) pAll.addEventListener("click", () => window.applyRotationPreset("all"));
-  if (pBase) pBase.addEventListener("click", () => window.applyRotationPreset("base_only"));
-  if (pDlc) pDlc.addEventListener("click", () => window.applyRotationPreset("dlc_only"));
-
-  document.getElementById("btn-refresh-telemetry").addEventListener("click", () => {
-    loadTelemetry();
-    showToast("Telemetría actualizada.", "info");
-  });
-
-  document.getElementById("btn-refresh-logs").addEventListener("click", () => {
-    loadLogs();
-  });
-
-  document.getElementById("toggle-hide-spam").addEventListener("change", () => {
-    loadLogs();
-  });
-
-  document.getElementById("btn-autoscroll-toggle").addEventListener("click", (ev) => {
-    appState.autoScrollLogs = !appState.autoScrollLogs;
-    ev.target.textContent = `Auto-Scroll: ${appState.autoScrollLogs ? "ON" : "OFF"}`;
-    ev.target.className = `btn btn-sm btn-secondary ${appState.autoScrollLogs ? "active" : ""}`;
-  });
-
-  // --- 4.5. Pilotos en Vivo y Moderación (/api/players) ---
-  function renderActivePlayersMessage(tbody, message, isError = false) {
-    tbody.innerHTML = `
-      <tr>
-        <td colspan="7" class="text-center" style="padding: 2.5rem 1rem; color: ${isError ? "var(--accent-red)" : "var(--text-muted)"};">
-          ${escapeHtml(message)}
-        </td>
-      </tr>
-    `;
-  }
-
+  // ==========================================================================
+  // 6. Pilotos y moderación (/api/players)
+  // ==========================================================================
   async function loadPlayersData() {
     const data = await apiGet("/api/players");
-    const activeTbody = document.getElementById("active-players-tbody");
+    const activeTbody = $("active-players-tbody");
     if (!data) {
-      if (activeTbody) renderActivePlayersMessage(activeTbody, "⚠️ No se pudo consultar /api/players. Se reintentará automáticamente.", true);
+      activeTbody.innerHTML = emptyRow(7, "No se pudo consultar /api/players", "Se reintentará automáticamente.", "error");
       return;
     }
 
-    // Contador en navbar
-    const counter = document.getElementById("active-players-counter");
-    if (counter) counter.textContent = data.total_active || 0;
+    const active = data.active_players || [];
+    appState.activePlayers = data.total_active || 0;
+    const counter = $("active-players-counter");
+    counter.textContent = appState.activePlayers;
+    counter.classList.toggle("has-players", appState.activePlayers > 0);
+    const sessionName = data.session && data.session.name ? ` · ${data.session.name}` : "";
+    $("live-drivers-count-tag").textContent =
+      `${appState.activePlayers} ${appState.activePlayers === 1 ? "piloto" : "pilotos"} en línea${sessionName}`;
 
-    const countTag = document.getElementById("live-drivers-count-tag");
-    if (countTag) {
-      const sessionName = data.session && data.session.name ? ` · ${data.session.name}` : "";
-      countTag.textContent = `${data.total_active || 0} Pilotos en Línea${sessionName}`;
+    if (data.live_error) {
+      activeTbody.innerHTML = emptyRow(7, "No se pudo leer server.log", data.live_error, "error");
+    } else if (!data.server_running) {
+      activeTbody.innerHTML = emptyRow(7, "Servidor detenido", "Inicia accServer desde el panel para ver a los pilotos en vivo.", "offline");
+    } else if (active.length === 0) {
+      activeTbody.innerHTML = emptyRow(7, "Pista vacía", "Esperando conexiones en el lobby.");
+    } else {
+      activeTbody.innerHTML = active.map(p => `
+        <tr>
+          <td>${carPlate(p.race_number ?? p.car_id)}</td>
+          <td><span class="driver-pill">${escapeHtml(p.driver_name)}</span>
+            ${p.is_admin ? '<span class="badge-admin">ADMIN</span>' : ""}${p.is_banned ? '<span class="badge-banned">BANEADO</span>' : ""}</td>
+          <td>${escapeHtml(p.car_model_name)}</td>
+          <td><a href="${steamProfileUrl(p.player_id)}" target="_blank" rel="noopener noreferrer" class="steam-link">${escapeHtml(p.player_id)}</a></td>
+          <td class="text-center"><span class="conn-id" title="connId / carId según server.log">${escapeHtml(p.conn_id)} / ${escapeHtml(p.car_id)}</span></td>
+          <td class="text-center"><span class="status-chip">EN PISTA</span></td>
+          <td class="text-center">
+            <button type="button" class="btn btn-sm btn-secondary" data-action="open-modal" data-payload="${encodePayload(p)}">Moderar</button>
+          </td>
+        </tr>`).join("");
     }
 
-    // 1. Pilotos Activos en Vivo
-    if (activeTbody) {
-      const active = data.active_players || [];
-      if (data.live_error) {
-        renderActivePlayersMessage(activeTbody, `⚠️ ${data.live_error}`, true);
-      } else if (!data.server_running) {
-        renderActivePlayersMessage(activeTbody, "⏹️ El accServer gestionado por el panel está detenido. Inícialo para ver pilotos en vivo.");
-      } else if (active.length === 0) {
-        renderActivePlayersMessage(activeTbody, "🏁 No hay pilotos conectados en este momento (esperando conexiones en el lobby).");
-      } else {
-        activeTbody.innerHTML = active.map(p => {
-          const adminBadge = p.is_admin ? `<span class="badge-admin">👑 ADMIN</span>` : "";
-          const bannedBadge = p.is_banned ? `<span class="badge-banned">🚫 BANEADO</span>` : "";
-          const carNum = p.race_number ?? p.car_id ?? "—";
-          const steamProfile = steamProfileUrl(p.player_id);
-          const driverPayload = encodePayload(p);
-
+    const recent = data.recent_players || [];
+    $("recent-players-tbody").innerHTML = recent.length
+      ? recent.map(p => {
+          const payload = encodePayload(p);
+          const role = p.is_admin ? '<span class="role-admin">Admin</span>' : (p.is_banned ? '<span class="role-banned">Baneado</span>' : "Piloto");
           return `
             <tr>
-              <td><span class="car-number-badge">#${escapeHtml(carNum)}</span></td>
+              <td>${carPlate(p.race_number || "—")}</td>
+              <td><span class="driver-pill">${escapeHtml(p.driver_name)}</span>
+                ${p.is_admin ? '<span class="badge-admin">ADMIN</span>' : ""}${p.is_banned ? '<span class="badge-banned">BANEADO</span>' : ""}</td>
+              <td>${escapeHtml(p.car_model_name)}</td>
+              <td><a href="${steamProfileUrl(p.player_id)}" target="_blank" rel="noopener noreferrer" class="steam-link">${escapeHtml(p.player_id)}</a></td>
+              <td class="text-center num" style="color: var(--timing-purple);">${formatLapTime(p.best_lap_ms)}</td>
+              <td class="text-center num">${escapeHtml(p.total_laps)}</td>
+              <td class="text-center">${role}</td>
               <td>
-                <span class="driver-pill">${escapeHtml(p.driver_name)}</span>
-                ${adminBadge}${bannedBadge}
+                <div class="row-actions">
+                  <button type="button" class="btn btn-sm btn-secondary" data-action="open-modal" data-payload="${payload}">Moderar</button>
+                  <button type="button" class="btn btn-sm btn-secondary" data-action="toggle-admin" data-payload="${payload}" data-make-admin="${!p.is_admin}">${p.is_admin ? "Quitar admin" : "Hacer admin"}</button>
+                  <button type="button" class="btn btn-sm btn-stop" data-action="ban-player" data-payload="${payload}" aria-label="Añadir ${escapeHtml(p.driver_name)} a la lista negra">Ban</button>
+                </div>
               </td>
-              <td><span style="color: var(--accent-cyan); font-weight: 500;">${escapeHtml(p.car_model_name)}</span></td>
-              <td><a href="${steamProfile}" target="_blank" rel="noopener noreferrer" class="steam-link">${escapeHtml(p.player_id)}</a></td>
-              <td class="text-center"><code title="connId / carId según server.log">${escapeHtml(p.conn_id)} / ${escapeHtml(p.car_id)}</code></td>
-              <td class="text-center"><span style="color: var(--accent-green); font-weight: 600;">● En Pista</span></td>
-              <td class="text-center">
-                <button class="btn btn-sm btn-secondary" data-action="open-modal" data-payload="${driverPayload}">
-                  ⚡ Moderar / Comandos
-                </button>
-              </td>
-            </tr>
-          `;
-        }).join("");
-      }
-    }
+            </tr>`;
+        }).join("")
+      : emptyRow(8, "Sin historial", "Todavía no hay pilotos en results/.");
 
-    // 2. Pilotos Recientes
-    const recentTbody = document.getElementById("recent-players-tbody");
-    if (recentTbody) {
-      const recent = data.recent_players || [];
-      if (recent.length === 0) {
-        recentTbody.innerHTML = `<tr><td colspan="8" class="text-center">No hay registros de sesiones recientes.</td></tr>`;
-      } else {
-        recentTbody.innerHTML = recent.map(p => {
-          const adminBadge = p.is_admin ? `<span class="badge-admin">👑 ADMIN</span>` : "";
-          const bannedBadge = p.is_banned ? `<span class="badge-banned">🚫 BANEADO</span>` : "";
-          const steamProfile = steamProfileUrl(p.player_id);
-          const driverPayload = encodePayload(p);
+    const banlist = data.banlist || [];
+    $("banlist-tbody").innerHTML = banlist.length
+      ? banlist.map(b => `
+          <tr>
+            <td class="driver-pill">${escapeHtml(b.driverName || "Desconocido")}</td>
+            <td><code>${escapeHtml(b.playerId)}</code></td>
+            <td style="color: #ff8a94;">${escapeHtml(b.reason || "Sin motivo")}</td>
+            <td class="text-center">
+              <button type="button" class="btn btn-sm btn-secondary" data-action="unban-player" data-payload="${encodePayload({ player_id: b.playerId })}">Desbanear</button>
+            </td>
+          </tr>`).join("")
+      : emptyRow(4, "Lista negra vacía");
 
+    const entrylist = data.entrylist || {};
+    const entries = entrylist.entries || [];
+    $("toggle-force-entrylist").checked = entrylist.forceEntryList === 1;
+    $("entrylist-tbody").innerHTML = entries.length
+      ? entries.map(e => {
+          const driver = (e.drivers && e.drivers[0]) || {};
+          const name = `${driver.firstName || ""} ${driver.lastName || ""}`.trim() || "Piloto registrado";
           return `
             <tr>
-              <td><span class="car-number-badge">#${escapeHtml(p.race_number || '—')}</span></td>
-              <td>
-                <span class="driver-pill">${escapeHtml(p.driver_name)}</span>
-                ${adminBadge}${bannedBadge}
-              </td>
-              <td><span style="color: var(--text-secondary);">${escapeHtml(p.car_model_name)}</span></td>
-              <td><a href="${steamProfile}" target="_blank" rel="noopener noreferrer" class="steam-link">${escapeHtml(p.player_id)}</a></td>
-              <td class="text-center" style="color: var(--accent-cyan); font-weight: 600;">${formatLapTime(p.best_lap_ms)}</td>
-              <td class="text-center">${escapeHtml(p.total_laps)}</td>
+              <td class="driver-pill">${escapeHtml(name)}</td>
+              <td><code>${escapeHtml(driver.playerID || "—")}</code></td>
+              <td class="text-center">${carPlate(e.raceNumber || "—")}</td>
+              <td class="text-center">${e.isServerAdmin === 1 ? '<span class="badge-admin">ADMIN</span>' : '<span class="badge-tag">AUTORIZADO</span>'}</td>
               <td class="text-center">
-                ${p.is_admin ? '<strong style="color: var(--accent-gold);">Admin</strong>' : (p.is_banned ? '<strong style="color: var(--accent-red);">Baneado</strong>' : 'Piloto')}
+                <button type="button" class="btn btn-sm btn-secondary" data-action="remove-entry" data-payload="${encodePayload({ player_id: driver.playerID || "", driver_name: name })}">Quitar</button>
               </td>
-              <td class="text-center" style="display: flex; gap: 0.3rem; justify-content: center;">
-                <button class="btn btn-sm btn-secondary" data-action="open-modal" data-payload="${driverPayload}" title="Abrir centro de sanciones">
-                  ⚡ Sanciones
-                </button>
-                <button class="btn btn-sm ${p.is_admin ? 'btn-stop' : 'btn-start'}" data-action="toggle-admin" data-payload="${driverPayload}" data-make-admin="${!p.is_admin}" title="Alternar Admin">
-                  ${p.is_admin ? 'Quitar Admin' : 'Hacer Admin'}
-                </button>
-                <button class="btn btn-sm btn-stop" data-action="ban-player" data-payload="${driverPayload}" title="Añadir a lista negra">
-                  🚫 Ban
-                </button>
-              </td>
-            </tr>
-          `;
-        }).join("");
-      }
-    }
-
-    // 3. Banlist / Lista Negra
-    const banlistTbody = document.getElementById("banlist-tbody");
-    if (banlistTbody) {
-      const banlist = data.banlist || [];
-      if (banlist.length === 0) {
-        banlistTbody.innerHTML = `<tr><td colspan="4" class="text-center" style="color: var(--text-muted);">No hay pilotos en la lista negra.</td></tr>`;
-      } else {
-        banlistTbody.innerHTML = banlist.map(b => {
-          const playerPayload = encodePayload({ player_id: b.playerId });
-          return `
-            <tr>
-              <td><strong>${escapeHtml(b.driverName || 'Desconocido')}</strong></td>
-              <td><code>${escapeHtml(b.playerId)}</code></td>
-              <td><span style="color: var(--accent-red); font-size: 0.85rem;">${escapeHtml(b.reason || 'Sin motivo')}</span></td>
-              <td class="text-center">
-                <button class="btn btn-sm btn-secondary" data-action="unban-player" data-payload="${playerPayload}">
-                  Desbanear
-                </button>
-              </td>
-            </tr>
-          `;
-        }).join("");
-      }
-    }
-
-    // 4. EntryList
-    const entrylistTbody = document.getElementById("entrylist-tbody");
-    if (entrylistTbody) {
-      const el = data.entrylist || {};
-      const entries = el.entries || [];
-      
-      const forceToggle = document.getElementById("toggle-force-entrylist");
-      if (forceToggle) forceToggle.checked = el.forceEntryList === 1;
-
-      if (entries.length === 0) {
-        entrylistTbody.innerHTML = `<tr><td colspan="5" class="text-center" style="color: var(--text-muted);">No hay entradas configuradas en entrylist.json.</td></tr>`;
-      } else {
-        entrylistTbody.innerHTML = entries.map(e => {
-          const d = (e.drivers && e.drivers.length > 0) ? e.drivers[0] : {};
-          const dName = `${d.firstName || ''} ${d.lastName || ''}`.trim() || 'Piloto Registrado';
-          const entryPayload = encodePayload({ player_id: d.playerID || "", driver_name: dName });
-          const isAdmin = e.isServerAdmin === 1;
-          return `
-            <tr>
-              <td><strong>${escapeHtml(dName)}</strong></td>
-              <td><code>${escapeHtml(d.playerID || '—')}</code></td>
-              <td class="text-center"><span class="car-number-badge">#${escapeHtml(e.raceNumber || '—')}</span></td>
-              <td class="text-center">${isAdmin ? '<span class="badge-admin">👑 ADMIN VIP</span>' : '<span class="badge-tag">AUTORIZADO</span>'}</td>
-              <td class="text-center">
-                <button class="btn btn-sm btn-secondary" data-action="remove-entry" data-payload="${entryPayload}">
-                  Quitar
-                </button>
-              </td>
-            </tr>
-          `;
-        }).join("");
-      }
-    }
+            </tr>`;
+        }).join("")
+      : emptyRow(5, "Entry list vacía", "Registra pilotos para darles dorsal fijo o rango de administrador.");
   }
 
-  // --- Ventana Modal de Moderación ---
-  window.currentModDriver = null;
-  window.currentModCar = null;
+  // ==========================================================================
+  // Modal de moderación
+  // ==========================================================================
+  const modal = $("moderation-modal");
   let modalTrigger = null;
+  let currentModDriver = null;
+  let currentModCar = null;
 
-  window.openModModal = (driverPayload) => {
-    const d = decodePayload(driverPayload);
+  function openModModal(payload) {
+    const driver = decodePayload(payload);
     modalTrigger = document.activeElement;
-    window.currentModDriver = d;
-    window.currentModCar = d.race_number || d.car_id || 1;
+    currentModDriver = driver;
+    currentModCar = driver.race_number || driver.car_id || 1;
 
-    document.getElementById("mod-modal-car-badge").textContent = `#${window.currentModCar}`;
-    document.getElementById("mod-modal-driver-name").textContent = d.driver_name || "Piloto";
-    document.getElementById("mod-modal-car-model").textContent = d.car_model_name || "GT3";
-    document.getElementById("mod-modal-steamid").textContent = d.player_id;
-    
-    const steamLink = document.getElementById("mod-modal-steam-link");
-    steamLink.href = steamProfileUrl(d.player_id);
-    steamLink.rel = "noopener noreferrer";
+    $("mod-modal-car-badge").textContent = currentModCar;
+    $("mod-modal-driver-name").textContent = driver.driver_name || "Piloto";
+    $("mod-modal-car-model").textContent = driver.car_model_name || "—";
+    $("mod-modal-steamid").textContent = driver.player_id || "—";
+    $("mod-modal-steam-link").href = steamProfileUrl(driver.player_id);
+    COMMANDS.forEach(command => {
+      $(`btn-cmd-${command}`).querySelector(".cmd-text").textContent = `/${command} ${currentModCar}`;
+    });
+    $("btn-mod-toggle-admin").querySelector("span").textContent = driver.is_admin ? "Quitar administrador" : "Asignar administrador";
 
-    const car = window.currentModCar;
-    document.getElementById("btn-cmd-kick").querySelector(".cmd-text").textContent = `/kick ${car}`;
-    document.getElementById("btn-cmd-ban").querySelector(".cmd-text").textContent = `/ban ${car}`;
-    document.getElementById("btn-cmd-dq").querySelector(".cmd-text").textContent = `/dq ${car}`;
-    document.getElementById("btn-cmd-dt").querySelector(".cmd-text").textContent = `/dt ${car}`;
-    document.getElementById("btn-cmd-dtc").querySelector(".cmd-text").textContent = `/dtc ${car}`;
-    document.getElementById("btn-cmd-sg10").querySelector(".cmd-text").textContent = `/sg10 ${car}`;
-    document.getElementById("btn-cmd-sg30").querySelector(".cmd-text").textContent = `/sg30 ${car}`;
-    document.getElementById("btn-cmd-tp5").querySelector(".cmd-text").textContent = `/tp5 ${car}`;
-    document.getElementById("btn-cmd-tp15").querySelector(".cmd-text").textContent = `/tp15 ${car}`;
-    document.getElementById("btn-cmd-clear").querySelector(".cmd-text").textContent = `/clear ${car}`;
-
-    const adminBtn = document.getElementById("btn-mod-toggle-admin");
-    adminBtn.querySelector("span").textContent = d.is_admin ? "👑 Quitar Administrador" : "👑 Asignar Administrador Permanente";
-
-    document.getElementById("moderation-modal").classList.remove("hidden");
-    document.getElementById("btn-close-mod-modal").focus();
-  };
+    modal.classList.remove("hidden");
+    $("btn-close-mod-modal").focus();
+  }
 
   function closeModModal() {
-    document.getElementById("moderation-modal").classList.add("hidden");
-    if (modalTrigger instanceof HTMLElement) modalTrigger.focus();
+    modal.classList.add("hidden");
+    if (modalTrigger instanceof HTMLElement && document.contains(modalTrigger)) modalTrigger.focus();
   }
 
-  document.getElementById("btn-close-mod-modal").addEventListener("click", closeModModal);
-  document.getElementById("btn-mod-modal-close").addEventListener("click", closeModModal);
+  $("btn-close-mod-modal").addEventListener("click", closeModModal);
+  $("btn-mod-modal-close").addEventListener("click", closeModModal);
+  modal.addEventListener("click", event => { if (event.target === modal) closeModModal(); });
+
   document.addEventListener("keydown", event => {
-    if (event.key === "Escape" && !document.getElementById("moderation-modal").classList.contains("hidden")) {
+    if (modal.classList.contains("hidden")) return;
+    if (event.key === "Escape") {
       closeModModal();
+      return;
+    }
+    if (event.key === "Tab") {
+      // Mantener el foco dentro del diálogo
+      const focusable = [...modal.querySelectorAll("button, [href], input, select")].filter(el => !el.disabled && el.offsetParent !== null);
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
     }
   });
 
-  window.copyCommand = (cmd) => {
-    navigator.clipboard.writeText(cmd).then(() => {
-      showToast(`¡Comando copiado: "${cmd}"! Pégalo en el chat de ACC.`, "success");
-    }).catch(() => {
-      showToast(`Comando: ${cmd}`, "info");
-    });
-  };
+  function copyCommand(command) {
+    navigator.clipboard.writeText(command)
+      .then(() => showToast(`Copiado «${command}». Pégalo en el chat de ACC.`, "success"))
+      .catch(() => showToast(`Comando: ${command}`, "info"));
+  }
 
-  document.getElementById("btn-cmd-kick").addEventListener("click", () => window.copyCommand(`/kick ${window.currentModCar}`));
-  document.getElementById("btn-cmd-ban").addEventListener("click", () => window.copyCommand(`/ban ${window.currentModCar}`));
-  document.getElementById("btn-cmd-dq").addEventListener("click", () => window.copyCommand(`/dq ${window.currentModCar}`));
-  document.getElementById("btn-cmd-dt").addEventListener("click", () => window.copyCommand(`/dt ${window.currentModCar}`));
-  document.getElementById("btn-cmd-dtc").addEventListener("click", () => window.copyCommand(`/dtc ${window.currentModCar}`));
-  document.getElementById("btn-cmd-sg10").addEventListener("click", () => window.copyCommand(`/sg10 ${window.currentModCar}`));
-  document.getElementById("btn-cmd-sg30").addEventListener("click", () => window.copyCommand(`/sg30 ${window.currentModCar}`));
-  document.getElementById("btn-cmd-tp5").addEventListener("click", () => window.copyCommand(`/tp5 ${window.currentModCar}`));
-  document.getElementById("btn-cmd-tp15").addEventListener("click", () => window.copyCommand(`/tp15 ${window.currentModCar}`));
-  document.getElementById("btn-cmd-clear").addEventListener("click", () => window.copyCommand(`/clear ${window.currentModCar}`));
-
-  document.getElementById("btn-cmd-ballast").addEventListener("click", () => {
-    const kg = document.getElementById("mod-ballast-val").value || 0;
-    window.copyCommand(`/ballast ${window.currentModCar} ${kg}`);
+  const COMMANDS = ["kick", "ban", "dq", "dt", "dtc", "sg10", "sg30", "tp5", "tp15", "clear"];
+  COMMANDS.forEach(command => {
+    $(`btn-cmd-${command}`).addEventListener("click", () => copyCommand(`/${command} ${currentModCar}`));
   });
+  $("btn-cmd-ballast").addEventListener("click", () => copyCommand(`/ballast ${currentModCar} ${$("mod-ballast-val").value || 0}`));
+  $("btn-cmd-restrictor").addEventListener("click", () => copyCommand(`/restrictor ${currentModCar} ${$("mod-restrictor-val").value || 0}`));
 
-  document.getElementById("btn-cmd-restrictor").addEventListener("click", () => {
-    const pct = document.getElementById("mod-restrictor-val").value || 0;
-    window.copyCommand(`/restrictor ${window.currentModCar} ${pct}`);
-  });
-
-  document.getElementById("btn-mod-toggle-admin").addEventListener("click", async () => {
-    if (!window.currentModDriver) return;
-    const d = window.currentModDriver;
-    const res = await apiPost("/api/moderation/admin", {
-      playerId: d.player_id,
-      driverName: d.driver_name,
-      carNumber: window.currentModCar,
-      isAdmin: !d.is_admin
-    });
-    showToast(res.message, res.success ? "success" : "error");
-    closeModModal();
-    loadPlayersData();
-  });
-
-  document.getElementById("btn-mod-add-ban").addEventListener("click", async () => {
-    if (!window.currentModDriver) return;
-    const d = window.currentModDriver;
-    const reason = prompt(`Motivo de baneo para ${d.driver_name}:`, "Conducta antideportiva");
-    if (!reason) return;
-    const res = await apiPost("/api/moderation/ban", {
-      playerId: d.player_id,
-      driverName: d.driver_name,
-      carNumber: window.currentModCar,
-      reason: reason
-    });
-    showToast(res.message, res.success ? "success" : "error");
-    closeModModal();
-    loadPlayersData();
-  });
-
-  window.toggleAdminDirect = async (driverPayload, makeAdmin) => {
-    const driver = decodePayload(driverPayload);
+  async function setAdmin(driver, makeAdmin, carNumber) {
     const res = await apiPost("/api/moderation/admin", {
       playerId: driver.player_id,
       driverName: driver.driver_name,
-      carNumber: driver.race_number || 99,
+      carNumber: carNumber || 99,
       isAdmin: makeAdmin
     });
     showToast(res.message, res.success ? "success" : "error");
-    loadPlayersData();
-  };
+    await loadPlayersData();
+    return res.success;
+  }
 
-  window.banDirect = async (driverPayload) => {
-    const driver = decodePayload(driverPayload);
-    const reason = prompt(`Motivo de baneo para ${driver.driver_name}:`, "Conducta inapropiada");
-    if (!reason) return;
+  async function banDriver(driver, carNumber) {
+    const reason = prompt(`Motivo del baneo para ${driver.driver_name}:`, "Conducta antideportiva");
+    if (!reason) return false;
     const res = await apiPost("/api/moderation/ban", {
       playerId: driver.player_id,
       driverName: driver.driver_name,
-      carNumber: driver.race_number || 0,
-      reason: reason
+      carNumber: carNumber || 0,
+      reason
     });
     showToast(res.message, res.success ? "success" : "error");
-    loadPlayersData();
-  };
+    await loadPlayersData();
+    return res.success;
+  }
 
-  window.unbanDirect = async (playerPayload) => {
-    const player = decodePayload(playerPayload);
-    if (!confirm(`¿Desbanear al piloto con SteamID ${player.player_id}?`)) return;
-    const res = await apiPost("/api/moderation/unban", { playerId: player.player_id });
-    showToast(res.message, res.success ? "success" : "error");
-    loadPlayersData();
-  };
+  $("btn-mod-toggle-admin").addEventListener("click", async (ev) => {
+    if (!currentModDriver) return;
+    await withBusy(ev.currentTarget, () => setAdmin(currentModDriver, !currentModDriver.is_admin, currentModCar));
+    closeModModal();
+  });
 
-  window.removeEntryDirect = async (entryPayload) => {
-    const entry = decodePayload(entryPayload);
-    if (!confirm(`¿Quitar a ${entry.driver_name} (${entry.player_id}) de la entry list?`)) return;
-    const res = await apiPost("/api/entrylist/remove", { playerId: entry.player_id });
-    showToast(res.message || "No se pudo quitar la entrada.", res.success ? "success" : "error");
-    loadPlayersData();
-  };
+  $("btn-mod-add-ban").addEventListener("click", async (ev) => {
+    if (!currentModDriver) return;
+    const done = await withBusy(ev.currentTarget, () => banDriver(currentModDriver, currentModCar));
+    if (done) closeModModal();
+  });
 
+  // ==========================================================================
+  // Acciones delegadas (tablas y tarjetas generadas dinámicamente)
+  // ==========================================================================
   document.addEventListener("change", event => {
     const control = event.target.closest("[data-action]");
     if (!control) return;
     if (control.dataset.action === "toggle-dlc") {
-      window.toggleDlc(control.dataset.dlcId, control.checked);
+      runRotationChange("/api/rotation/dlc-toggle", { dlc_id: control.dataset.dlcId, enabled: control.checked }, control);
     }
     if (control.dataset.action === "toggle-track") {
-      window.toggleTrackRotation(control.dataset.trackFile, control.checked);
+      runRotationChange("/api/rotation/track-toggle", { track_file: control.dataset.trackFile, enabled: control.checked }, control);
     }
   });
 
-  document.addEventListener("click", event => {
-    const control = event.target.closest("[data-action]");
+  document.addEventListener("click", async event => {
+    const control = event.target.closest("button[data-action]");
     if (!control) return;
     const { action, payload, trackFile, makeAdmin } = control.dataset;
     try {
-      if (action === "select-track") window.selectTrackDirect(trackFile);
-      if (action === "open-modal") window.openModModal(payload);
-      if (action === "toggle-admin") window.toggleAdminDirect(payload, makeAdmin === "true");
-      if (action === "ban-player") window.banDirect(payload);
-      if (action === "unban-player") window.unbanDirect(payload);
-      if (action === "remove-entry") window.removeEntryDirect(payload);
+      if (action === "select-track") await changeTrack(trackFile, control);
+      if (action === "open-modal") openModModal(payload);
+      if (action === "toggle-admin") {
+        const driver = decodePayload(payload);
+        await withBusy(control, () => setAdmin(driver, makeAdmin === "true", driver.race_number));
+      }
+      if (action === "ban-player") {
+        const driver = decodePayload(payload);
+        await withBusy(control, () => banDriver(driver, driver.race_number));
+      }
+      if (action === "unban-player") {
+        const player = decodePayload(payload);
+        if (!confirm(`¿Quitar de la lista negra a ${player.player_id}?`)) return;
+        await withBusy(control, async () => {
+          const res = await apiPost("/api/moderation/unban", { playerId: player.player_id });
+          showToast(res.message, res.success ? "success" : "error");
+          await loadPlayersData();
+        });
+      }
+      if (action === "remove-entry") {
+        const entry = decodePayload(payload);
+        if (!confirm(`¿Quitar a ${entry.driver_name} (${entry.player_id}) de la entry list?`)) return;
+        await withBusy(control, async () => {
+          const res = await apiPost("/api/entrylist/remove", { playerId: entry.player_id });
+          showToast(res.message || "No se pudo quitar la entrada.", res.success ? "success" : "error");
+          await loadPlayersData();
+        });
+      }
     } catch {
       showToast("La acción contiene datos inválidos.", "error");
     }
   });
 
-  document.getElementById("form-add-ban").addEventListener("submit", async (ev) => {
-    ev.preventDefault();
-    const pid = document.getElementById("ban-input-pid").value.trim();
-    const name = document.getElementById("ban-input-name").value.trim();
-    const reason = document.getElementById("ban-input-reason").value.trim();
-
-    const res = await apiPost("/api/moderation/ban", {
-      playerId: pid,
-      driverName: name,
-      carNumber: 0,
-      reason: reason
-    });
+  // ==========================================================================
+  // Controles del servidor y la rotación
+  // ==========================================================================
+  $("btn-start").addEventListener("click", ev => withBusy(ev.currentTarget, async () => {
+    const res = await apiPost("/api/server/start");
     showToast(res.message, res.success ? "success" : "error");
-    document.getElementById("form-add-ban").reset();
-    loadPlayersData();
+    await syncServerStatus();
+  }));
+
+  $("btn-restart").addEventListener("click", ev => {
+    if (!confirm("Reiniciar accServer desconectará a todos los pilotos. ¿Continuar?")) return;
+    withBusy(ev.currentTarget, async () => {
+      showToast("Reiniciando servidor y liberando puertos…", "info");
+      const res = await apiPost("/api/server/restart");
+      showToast(res.message, res.success ? "success" : "error");
+      await syncServerStatus();
+    });
   });
 
-  document.getElementById("form-add-entry").addEventListener("submit", async (ev) => {
-    ev.preventDefault();
-    const pid = document.getElementById("entry-input-pid").value.trim();
-    const name = document.getElementById("entry-input-name").value.trim();
-    const carNum = parseInt(document.getElementById("entry-input-num").value, 10) || 99;
-    const isAdmin = document.getElementById("entry-input-is-admin").checked;
-
-    const res = await apiPost("/api/moderation/admin", {
-      playerId: pid,
-      driverName: name,
-      carNumber: carNum,
-      isAdmin: isAdmin
+  $("btn-stop").addEventListener("click", ev => {
+    if (!confirm("¿Detener accServer? Los pilotos conectados serán desconectados.")) return;
+    withBusy(ev.currentTarget, async () => {
+      const res = await apiPost("/api/server/stop");
+      showToast(res.message, res.success ? "success" : "error");
+      await syncServerStatus();
     });
-    showToast(res.message, res.success ? "success" : "error");
-    document.getElementById("form-add-entry").reset();
-    loadPlayersData();
   });
 
-  document.getElementById("toggle-force-entrylist").addEventListener("change", async (ev) => {
-    const enabled = ev.target.checked;
+  $("auto-rotation-toggle").addEventListener("change", async ev => {
+    const toggle = ev.currentTarget;
+    const enabled = toggle.checked;
+    appState.rotationRequestPending = true;
+    toggle.disabled = true;
+    renderAutoRotation(enabled);
+    const res = await apiPost("/api/rotation/toggle", { enabled });
+    appState.rotationRequestPending = false;
+    toggle.disabled = false;
+    if (!res.success) renderAutoRotation(!enabled);
+    showToast(res.message || "No se pudo cambiar la auto-rotación.", res.success ? "info" : "error");
+  });
+
+  $("btn-skip-track").addEventListener("click", ev => {
+    if (appState.isRunning && !confirm("Saltar de pista reinicia accServer y desconecta a los pilotos. ¿Continuar?")) return;
+    withBusy(ev.currentTarget, async () => {
+      const res = await apiPost("/api/rotation/skip");
+      showToast(res.message, res.success ? "success" : "error");
+      await Promise.all([syncServerStatus(), loadTracksPool()]);
+    });
+  });
+
+  $("btn-apply-track").addEventListener("click", ev => changeTrack($("select-direct-track").value, ev.currentTarget));
+
+  [["btn-preset-all", "all"], ["btn-preset-base", "base_only"], ["btn-preset-dlc", "dlc_only"]].forEach(([id, preset]) => {
+    $(id).addEventListener("click", ev => withBusy(ev.currentTarget, () => runRotationChange("/api/rotation/preset", { preset })));
+  });
+
+  $("btn-refresh-telemetry").addEventListener("click", ev => withBusy(ev.currentTarget, loadTelemetry));
+  $("btn-refresh-players").addEventListener("click", ev => withBusy(ev.currentTarget, loadPlayersData));
+  $("btn-refresh-logs").addEventListener("click", ev => withBusy(ev.currentTarget, loadLogs));
+  $("toggle-hide-spam").addEventListener("change", loadLogs);
+  $("select-log-lines").addEventListener("change", loadLogs);
+
+  $("btn-autoscroll-toggle").addEventListener("click", ev => {
+    appState.autoScrollLogs = !appState.autoScrollLogs;
+    ev.currentTarget.classList.toggle("active", appState.autoScrollLogs);
+    ev.currentTarget.setAttribute("aria-pressed", String(appState.autoScrollLogs));
+    ev.currentTarget.textContent = appState.autoScrollLogs ? "Auto-scroll" : "Auto-scroll (pausado)";
+  });
+
+  $("form-add-ban").addEventListener("submit", async ev => {
+    ev.preventDefault();
+    const form = ev.currentTarget;
+    await withBusy(form.querySelector("button[type=submit]"), async () => {
+      const res = await apiPost("/api/moderation/ban", {
+        playerId: $("ban-input-pid").value.trim(),
+        driverName: $("ban-input-name").value.trim(),
+        carNumber: 0,
+        reason: $("ban-input-reason").value.trim()
+      });
+      showToast(res.message, res.success ? "success" : "error");
+      if (res.success) form.reset();
+      await loadPlayersData();
+    });
+  });
+
+  $("form-add-entry").addEventListener("submit", async ev => {
+    ev.preventDefault();
+    const form = ev.currentTarget;
+    await withBusy(form.querySelector("button[type=submit]"), async () => {
+      const res = await apiPost("/api/moderation/admin", {
+        playerId: $("entry-input-pid").value.trim(),
+        driverName: $("entry-input-name").value.trim(),
+        carNumber: parseInt($("entry-input-num").value, 10) || 99,
+        isAdmin: $("entry-input-is-admin").checked
+      });
+      showToast(res.message, res.success ? "success" : "error");
+      if (res.success) form.reset();
+      await loadPlayersData();
+    });
+  });
+
+  $("toggle-force-entrylist").addEventListener("change", async ev => {
+    const toggle = ev.currentTarget;
+    const enabled = toggle.checked;
+    toggle.disabled = true;
     const res = await apiPost("/api/entrylist/force", { enabled });
-    if (!res.success) ev.target.checked = !enabled;
+    toggle.disabled = false;
+    if (!res.success) toggle.checked = !enabled;
     showToast(res.message || "No se pudo cambiar la whitelist.", res.success ? "success" : "error");
   });
 
-  document.getElementById("btn-refresh-players").addEventListener("click", () => {
-    loadPlayersData();
-    showToast("Pilotos actualizados.", "info");
-  });
+  // ==========================================================================
+  // Pestañas accesibles (flechas, Inicio/Fin) y enlazables por #hash
+  // ==========================================================================
+  const tabButtons = [...document.querySelectorAll(".tab-btn")];
+  const TAB_LOADERS = {
+    "tab-telemetry": loadTelemetry,
+    "tab-players": loadPlayersData,
+    "tab-config": loadConfigData,
+    "tab-tracks": loadTracksPool,
+    "tab-logs": loadLogs
+  };
 
-  // --- 7. Navegación por Pestañas ---
-  const tabButtons = document.querySelectorAll(".tab-btn");
-  tabButtons.forEach(btn => {
-    btn.addEventListener("click", () => {
-      tabButtons.forEach(b => b.classList.remove("active"));
-      document.querySelectorAll(".tab-content").forEach(c => c.classList.remove("active"));
+  function activateTab(targetId, { focus = false, updateHash = true } = {}) {
+    const button = tabButtons.find(btn => btn.dataset.tab === targetId);
+    if (!button) return;
+    tabButtons.forEach(btn => {
+      const selected = btn === button;
+      btn.classList.toggle("active", selected);
+      btn.setAttribute("aria-selected", String(selected));
+      btn.tabIndex = selected ? 0 : -1;
+    });
+    document.querySelectorAll(".tab-content").forEach(panel => panel.classList.toggle("active", panel.id === targetId));
+    appState.currentTab = targetId;
+    if (focus) button.focus();
+    if (updateHash) history.replaceState(null, "", `#${targetId.replace("tab-", "")}`);
+    TAB_LOADERS[targetId]();
+  }
 
-      btn.classList.add("active");
-      const targetId = btn.getAttribute("data-tab");
-      document.getElementById(targetId).classList.add("active");
-      appState.currentTab = targetId;
-
-      if (targetId === "tab-config") loadConfigData();
-      if (targetId === "tab-logs") loadLogs();
-      if (targetId === "tab-telemetry") loadTelemetry();
-      if (targetId === "tab-tracks") loadTracksPool();
-      if (targetId === "tab-players") loadPlayersData();
+  tabButtons.forEach((button, index) => {
+    button.addEventListener("click", () => activateTab(button.dataset.tab));
+    button.addEventListener("keydown", event => {
+      const moves = { ArrowRight: index + 1, ArrowLeft: index - 1, Home: 0, End: tabButtons.length - 1 };
+      if (!(event.key in moves)) return;
+      event.preventDefault();
+      const next = tabButtons[(moves[event.key] + tabButtons.length) % tabButtons.length];
+      activateTab(next.dataset.tab, { focus: true });
     });
   });
 
-  // --- 8. Inicialización y Bucles de Sondeo (Polling) ---
+  // ==========================================================================
+  // Arranque y sondeo secuencial (sin solapar peticiones; más lento en segundo plano)
+  // ==========================================================================
+  async function pollTick() {
+    await syncServerStatus();
+    if (appState.currentTab === "tab-logs") await loadLogs();
+    if (appState.currentTab === "tab-players") await loadPlayersData();
+  }
+
+  async function pollLoop() {
+    try {
+      await pollTick();
+    } finally {
+      setTimeout(pollLoop, document.hidden ? POLL_HIDDEN_INTERVAL_MS : POLL_INTERVAL_MS);
+    }
+  }
+
+  const initialTab = `tab-${(location.hash || "").replace("#", "")}`;
   syncServerStatus();
   loadTracksPool();
-  loadTelemetry();
   loadPlayersData();
-
-  // Bucle de estado cada 3 segundos
-  setInterval(() => {
-    syncServerStatus();
-    if (appState.currentTab === "tab-logs") {
-      loadLogs();
-    }
-    if (appState.currentTab === "tab-players") {
-      loadPlayersData();
-    }
-  }, 3000);
+  if (TAB_LOADERS[initialTab] && initialTab !== "tab-telemetry") {
+    activateTab(initialTab, { updateHash: false });
+    loadTelemetry();
+  } else {
+    loadTelemetry();
+  }
+  setTimeout(pollLoop, POLL_INTERVAL_MS);
 });

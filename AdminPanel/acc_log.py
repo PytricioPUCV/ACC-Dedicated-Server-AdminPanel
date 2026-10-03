@@ -11,12 +11,21 @@ mismo mensaje sin el prefijo. Formato real de una conexión y su desconexión:
     car 1001 has no driving connection anymore, will remove it
     0 client(s) online
 
-El log no informa ping. El seguimiento es incremental (offset en bytes) para que el spam
-de "onCarUpdate ... in the future" no desplace las líneas de conexión fuera de la ventana.
+El log no informa ping; sí avisa de paquetes UDP tardíos antes de un timeout
+("Late lastUdpPaketReceived for connId 0: 2479 ms (Nombre)"), que se exponen como lag_ms.
+
+Dos fuentes posibles:
+- Flujo en vivo (modo stream): cuando el panel lanza accServer en una pseudoconsola (conpty.py)
+  recibe cada línea al instante.
+- server.log: accServer lo escribe con buffer de varios KB, así que puede ir minutos por detrás;
+  se usa para servidores adoptados o si ConPTY no está disponible. El seguimiento es incremental
+  (offset en bytes) para que el spam de onCarUpdate no desplace las líneas de conexión.
 """
+import collections
 import os
 import re
 import threading
+import time
 
 TIMESTAMP_PREFIX_RE = re.compile(r"^\d+:\s?")
 SERVER_START_RE = re.compile(r"^Server starting with version\b")
@@ -30,11 +39,15 @@ CLIENTS_ONLINE_RE = re.compile(r"^(\d+) client\(s\) online")
 ALIVE_CONNECTIONS_RE = re.compile(r"^Alive connections: (\d+)")
 SESSION_CHANGED_RE = re.compile(r"^Session changed: .*? -> (.+?)\s*$")
 SESSION_PHASE_RE = re.compile(r"^Detected sessionPhase <.*?> -> <(.+?)> \((.+?)\)")
+LATE_UDP_RE = re.compile(r"^Late lastUdpPaketReceived for connId (\d+): (\d+) ms")
 CAR_UPDATE_SPAM_RE = re.compile(r"==ERR: onCarUpdate \(\d+\): timestamp is -?\d+ ms in the future")
 CAR_UPDATE_SPAM_BYTES_RE = re.compile(CAR_UPDATE_SPAM_RE.pattern.encode("ascii"))
 
 READ_CHUNK_BYTES = 1 << 20
 TAIL_BLOCK_BYTES = 64 * 1024
+STREAM_HISTORY_LINES = 5000
+# accServer repite el aviso cada ~1 s mientras dura el corte; pasado este margen se da por recuperado.
+LAG_WINDOW_SECONDS = 5
 
 
 def decode_log_line(raw):
@@ -57,7 +70,8 @@ def is_spam_line(line):
 class LivePlayersState:
     """Máquina de estados de conexiones a partir de mensajes del log (sin prefijo de tiempo)."""
 
-    def __init__(self):
+    def __init__(self, clock=time.monotonic):
+        self.clock = clock
         self.reset()
 
     def reset(self):
@@ -91,6 +105,8 @@ class LivePlayersState:
                 "car_model_id": int(match.group(4)),
                 "car_id": None,
                 "race_number": None,
+                "lag_ms": None,
+                "_lag_at": None,
             }
             self.pending_conn_id = conn_id
             return
@@ -110,6 +126,14 @@ class LivePlayersState:
             car_id, conn_id = int(match.group(1)), int(match.group(2))
             if conn_id in self.connections:
                 self._assign_car(conn_id, car_id)
+            return
+
+        match = LATE_UDP_RE.match(message)
+        if match:
+            conn = self.connections.get(int(match.group(1)))
+            if conn:
+                conn["lag_ms"] = int(match.group(2))
+                conn["_lag_at"] = self.clock()
             return
 
         match = CLIENT_CLOSED_RE.match(message) or DEAD_CONNECTION_RE.match(message)
@@ -159,23 +183,73 @@ class LivePlayersState:
 
     def players(self):
         """Sólo conexiones con coche asignado: una solicitud rechazada nunca crea coche."""
-        return [dict(conn) for _, conn in sorted(self.connections.items()) if conn["car_id"] is not None]
+        now = self.clock()
+        result = []
+        for _, conn in sorted(self.connections.items()):
+            if conn["car_id"] is None:
+                continue
+            player = {key: value for key, value in conn.items() if not key.startswith("_")}
+            if conn["_lag_at"] is None or now - conn["_lag_at"] > LAG_WINDOW_SECONDS:
+                player["lag_ms"] = None
+            result.append(player)
+        return result
 
 
 class LiveLogTracker:
-    """Sigue server.log por offset; reinicia el estado si el archivo cambia, se trunca o desaparece."""
+    """Estado de pilotos desde el flujo en vivo de accServer o, si no hay flujo, desde server.log.
 
-    def __init__(self):
+    En modo archivo sigue server.log por offset y reinicia el estado si el archivo cambia, se trunca
+    o desaparece.
+    """
+
+    def __init__(self, clock=time.monotonic):
         self._lock = threading.Lock()
-        self._state = LivePlayersState()
+        self._state = LivePlayersState(clock)
         self._path = None
         self._file_id = None
         self._offset = 0
         self._partial = b""
+        self._stream_generation = None
+        self._generation_counter = 0
+        self._history = collections.deque(maxlen=STREAM_HISTORY_LINES)
 
     def reset(self):
         with self._lock:
             self._reset_locked()
+            self._stream_generation = None
+
+    def start_stream(self):
+        """Pasa a modo stream para un accServer recién lanzado; devuelve el identificador del flujo."""
+        with self._lock:
+            self._reset_locked()
+            self._history.clear()
+            self._generation_counter += 1
+            self._stream_generation = self._generation_counter
+            return self._stream_generation
+
+    def feed_line(self, generation, line):
+        """Procesa una línea del flujo; se ignoran las de un flujo anterior (proceso ya detenido)."""
+        with self._lock:
+            if generation != self._stream_generation:
+                return
+            self._history.append(line)
+            self._state.feed(line)
+
+    def end_stream(self, generation):
+        with self._lock:
+            if generation == self._stream_generation:
+                self._reset_locked()
+                self._stream_generation = None
+
+    @property
+    def streaming(self):
+        with self._lock:
+            return self._stream_generation is not None
+
+    def stream_lines(self):
+        """Copia del historial del flujo en vivo, o None si no hay flujo activo."""
+        with self._lock:
+            return list(self._history) if self._stream_generation is not None else None
 
     def skip_to_end(self, path):
         """Ignora el contenido actual (ejecución anterior); se leerá lo que accServer escriba después.
@@ -185,6 +259,7 @@ class LiveLogTracker:
         with self._lock:
             self._path = path
             self._reset_locked()
+            self._stream_generation = None
             try:
                 stat = os.stat(path)
             except FileNotFoundError:
@@ -200,6 +275,8 @@ class LiveLogTracker:
 
     def poll(self, path):
         with self._lock:
+            if self._stream_generation is not None:
+                return self._snapshot_locked()
             if path != self._path:
                 self._path = path
                 self._reset_locked()
@@ -237,6 +314,12 @@ class LiveLogTracker:
             "clients_online": self._state.clients_online,
             "session": dict(self._state.session),
         }
+
+
+def filter_recent_lines(lines, count, hide_spam=False):
+    """Últimas `count` líneas (con salto final) de una lista; filtra el spam antes de limitar."""
+    kept = [line for line in lines if not (hide_spam and is_spam_line(line))]
+    return [line + "\n" for line in kept[-count:]], len(lines) - len(kept)
 
 
 def tail_log_lines(path, count, hide_spam=False, max_bytes=4 << 20):

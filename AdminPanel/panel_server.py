@@ -20,6 +20,7 @@ from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 from urllib.parse import urlparse, parse_qs, unquote
 
 import acc_log
+import conpty
 
 # Asegurar codificación utf-8 en la consola de Windows para evitar errores de charmap cp1252
 if sys.stdout:
@@ -152,6 +153,8 @@ AUTH_FILE = os.path.join(ADMIN_PANEL_DIR, "panel_auth.json")
 MAX_REQUEST_BYTES = 1_000_000
 MAX_LOG_LINES = 1_000
 MAX_RESULT_FILE_BYTES = 5_000_000
+# Versión del contrato de la API; la web avisa si el ejecutable en marcha es más antiguo que ella.
+API_VERSION = 2
 KILL_WAIT_SECONDS = 10
 PORT_RELEASE_SECONDS = 2.5
 REQUEST_TIMEOUT_SECONDS = 30
@@ -605,8 +608,6 @@ def parse_active_players():
         except OSError as error:
             live_error = f"No fue posible leer server.log: {error.strerror or error}"
             print(f"[!] {live_error}")
-    else:
-        LIVE_LOG.reset()
 
     # 2. Extraer pilotos recientes de results/*.json
     recent = []
@@ -667,6 +668,7 @@ def parse_active_players():
         "recent_players": recent,
         "total_active": len(active_list),
         "server_running": server_running,
+        "live_source": "stream" if LIVE_LOG.streaming else "server.log",
         "clients_online": live["clients_online"],
         "session": live["session"],
         "live_error": live_error,
@@ -777,6 +779,36 @@ def kill_acc_server():
             app_state["server_start_time"] = 0
         return True
 
+def echo_server_line(line):
+    """Reenvía la salida de accServer a la consola del panel, sin el spam de onCarUpdate."""
+    if acc_log.is_spam_line(line):
+        return
+    try:
+        print(line, flush=True)
+    except (OSError, ValueError):
+        pass
+
+
+def launch_acc_process():
+    """Lanza accServer en una pseudoconsola para leer su salida en tiempo real; si no es posible, sin ella.
+
+    server.log y los pipes reciben la salida con buffer (minutos de retraso); la pseudoconsola no.
+    """
+    generation = LIVE_LOG.start_stream()
+
+    def on_line(line):
+        LIVE_LOG.feed_line(generation, line)
+        echo_server_line(line)
+
+    try:
+        return conpty.ConPtyProcess(EXE_PATH, SERVER_DIR, on_line,
+                                    on_exit=lambda: LIVE_LOG.end_stream(generation)).start()
+    except OSError as error:
+        print(f"[!] Sin pseudoconsola ({error}); los pilotos en vivo se leerán de server.log con retraso.")
+        LIVE_LOG.skip_to_end(LOG_FILE)
+        return subprocess.Popen([EXE_PATH], cwd=SERVER_DIR).pid
+
+
 def start_acc_server(track_file=None):
     with lifecycle_lock:
         if is_acc_running():
@@ -799,17 +831,16 @@ def start_acc_server(track_file=None):
         write_json_utf16(os.path.join(CFG_DIR, "event.json"), template)
         print(f"[+] Pista aplicada desde la plantilla: {track_file}")
         print(f"[+] Lanzando accServer.exe en {SERVER_DIR}...")
-        LIVE_LOG.skip_to_end(LOG_FILE)
-        proc = subprocess.Popen([EXE_PATH], cwd=SERVER_DIR)
-        atomic_write_json(PID_FILE, {"pid": proc.pid, "started_at": time.time()}, "utf-8")
+        pid = launch_acc_process()
+        atomic_write_json(PID_FILE, {"pid": pid, "started_at": time.time()}, "utf-8")
 
         with state_lock:
             app_state["current_track_file"] = track_file
             app_state["current_track_idx"] = TRACK_ROTATION.index(track_file) if track_file in TRACK_ROTATION else -1
-            app_state["server_process_pid"] = proc.pid
+            app_state["server_process_pid"] = pid
             app_state["server_start_time"] = time.time()
             app_state["status_message"] = f"Servidor en línea en pista: {track_file}"
-        return proc
+        return pid
 
 def next_track_in_rotation(rotation, current_track_file):
     """Pista siguiente a la actual; si la actual no está en la rotación, la siguiente según el catálogo."""
@@ -1420,6 +1451,7 @@ class AdminPanelHandler(BaseHTTPRequestHandler):
             msg = app_state["status_message"]
 
         self.send_json({
+            "api_version": API_VERSION,
             "is_running": running,
             "unmanaged_acc_detected": unmanaged,
             "pid": pid,
@@ -1657,7 +1689,11 @@ class AdminPanelHandler(BaseHTTPRequestHandler):
 
         logs = []
         hidden = 0
-        if os.path.exists(LOG_FILE):
+        stream_lines = LIVE_LOG.stream_lines()
+        if stream_lines is not None:
+            # accServer escribe server.log con buffer: con flujo en vivo se muestra lo que ya ocurrió.
+            logs, hidden = acc_log.filter_recent_lines(stream_lines, lines_count, hide_spam=hide_spam)
+        elif os.path.exists(LOG_FILE):
             try:
                 logs, hidden = acc_log.tail_log_lines(LOG_FILE, lines_count, hide_spam=hide_spam)
             except OSError:
@@ -1665,7 +1701,7 @@ class AdminPanelHandler(BaseHTTPRequestHandler):
         else:
             logs = ["El archivo server.log aún no se ha generado."]
 
-        self.send_json({"logs": logs, "hidden_spam_lines": hidden})
+        self.send_json({"logs": logs, "hidden_spam_lines": hidden, "live_stream": stream_lines is not None})
 
     # --- Servir Archivos Estáticos del Frontend ---
     def handle_static_files(self, path):

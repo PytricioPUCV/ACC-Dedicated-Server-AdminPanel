@@ -273,6 +273,12 @@ a { color: var(--accent-cyan); }
 
 .connection-banner[hidden] { display: none; }
 
+.version-banner {
+  background: linear-gradient(90deg, rgba(255, 183, 3, 0.2), rgba(255, 183, 3, 0.1));
+  border-bottom-color: rgba(255, 183, 3, 0.45);
+  color: #ffe6a6;
+}
+
 @keyframes slideDown { from { transform: translateY(-100%); opacity: 0; } to { transform: none; opacity: 1; } }
 
 /* ==========================================================================
@@ -956,6 +962,9 @@ input:disabled + .slider { opacity: 0.4; }
   70% { box-shadow: 0 0 0 6px rgba(0, 245, 155, 0); }
   100% { box-shadow: 0 0 0 0 rgba(0, 245, 155, 0); }
 }
+
+.status-chip.lag { background: var(--accent-gold-soft); color: var(--accent-gold); }
+.status-chip.lag::before { animation: blink 0.8s steps(2) infinite; }
 
 .conn-id { font-family: var(--font-mono); font-size: 0.8rem; color: var(--text-secondary); }
 

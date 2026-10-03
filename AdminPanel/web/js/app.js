@@ -239,6 +239,8 @@ document.addEventListener("DOMContentLoaded", () => {
     const data = await apiGet("/api/status");
     if (!data) return;
 
+    // Un ejecutable antiguo sirve esta web desde AdminPanel\web pero no tiene la API nueva.
+    $("version-banner").hidden = data.api_version !== undefined;
     appState.isRunning = Boolean(data.is_running);
     appState.unmanaged = Boolean(data.unmanaged_acc_detected);
 
@@ -628,11 +630,16 @@ document.addEventListener("DOMContentLoaded", () => {
     counter.textContent = appState.activePlayers;
     counter.classList.toggle("has-players", appState.activePlayers > 0);
     const sessionName = data.session && data.session.name ? ` · ${data.session.name}` : "";
-    $("live-drivers-count-tag").textContent =
-      `${appState.activePlayers} ${appState.activePlayers === 1 ? "piloto" : "pilotos"} en línea${sessionName}`;
+    const countTag = $("live-drivers-count-tag");
+    countTag.textContent = `${appState.activePlayers} ${appState.activePlayers === 1 ? "piloto" : "pilotos"} en línea${sessionName}`;
+    countTag.title = data.live_source === "stream"
+      ? "Datos en tiempo real desde la consola de accServer"
+      : "Datos desde server.log: accServer lo escribe con buffer y puede ir con retraso";
 
     if (data.live_error) {
       activeTbody.innerHTML = emptyRow(7, "No se pudo leer server.log", data.live_error, "error");
+    } else if (data.server_running === undefined) {
+      activeTbody.innerHTML = emptyRow(7, "Backend desactualizado", "Recompila ACC_AdminPanel.exe (build_release.bat) para ver pilotos en vivo.", "error");
     } else if (!data.server_running) {
       activeTbody.innerHTML = emptyRow(7, "Servidor detenido", "Inicia accServer desde el panel para ver a los pilotos en vivo.", "offline");
     } else if (active.length === 0) {
@@ -646,7 +653,9 @@ document.addEventListener("DOMContentLoaded", () => {
           <td>${escapeHtml(p.car_model_name)}</td>
           <td><a href="${steamProfileUrl(p.player_id)}" target="_blank" rel="noopener noreferrer" class="steam-link">${escapeHtml(p.player_id)}</a></td>
           <td class="text-center"><span class="conn-id" title="connId / carId según server.log">${escapeHtml(p.conn_id)} / ${escapeHtml(p.car_id)}</span></td>
-          <td class="text-center"><span class="status-chip">EN PISTA</span></td>
+          <td class="text-center">${p.lag_ms
+            ? `<span class="status-chip lag" title="accServer no recibe paquetes UDP del piloto desde hace ${escapeHtml(p.lag_ms)} ms">LAG ${(p.lag_ms / 1000).toFixed(1)} s</span>`
+            : '<span class="status-chip">EN PISTA</span>'}</td>
           <td class="text-center">
             <button type="button" class="btn btn-sm btn-secondary" data-action="open-modal" data-payload="${encodePayload(p)}">Moderar</button>
           </td>

@@ -7,11 +7,13 @@ import os
 import re
 import shutil
 import secrets
+import socket
 import subprocess
 import sys
 import tempfile
 import threading
 import time
+import traceback
 import webbrowser
 from datetime import datetime
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
@@ -150,6 +152,10 @@ AUTH_FILE = os.path.join(ADMIN_PANEL_DIR, "panel_auth.json")
 MAX_REQUEST_BYTES = 1_000_000
 MAX_LOG_LINES = 1_000
 MAX_RESULT_FILE_BYTES = 5_000_000
+KILL_WAIT_SECONDS = 10
+PORT_RELEASE_SECONDS = 2.5
+REQUEST_TIMEOUT_SECONDS = 30
+SECRET_SETTINGS_KEYS = ("adminPassword", "password", "spectatorPassword")
 PANEL_TOKEN = None
 LIVE_LOG = acc_log.LiveLogTracker()
 
@@ -470,22 +476,24 @@ def validate_config_payload(post_data):
     if not isinstance(post_data, dict):
         raise ValidationError("El cuerpo debe ser un objeto JSON.")
 
-    current = {
-        "settings": read_json_safe(os.path.join(CFG_DIR, "settings.json"), {}),
-        "configuration": read_json_safe(os.path.join(CFG_DIR, "configuration.json"), {}),
-        "event": read_json_safe(os.path.join(CFG_DIR, "event.json"), {}),
-        "assistRules": read_json_safe(os.path.join(CFG_DIR, "assistRules.json"), {})
-    }
+    current = {}
+    for section in ("settings", "configuration", "event", "assistRules"):
+        data = read_json_safe(os.path.join(CFG_DIR, f"{section}.json"), {})
+        current[section] = data if isinstance(data, dict) else {}
     validated = {}
 
     if "settings" in post_data:
         incoming = post_data["settings"]
         if not isinstance(incoming, dict):
             raise ValidationError("settings debe ser un objeto.")
+        # GET /api/config no expone contraseñas: si no llegan, se conservan las actuales.
         settings = {**current["settings"], **incoming}
         settings["serverName"] = clean_text(settings.get("serverName", ""), "serverName", 128)
         settings["adminPassword"] = clean_text(settings.get("adminPassword", ""), "adminPassword", 128)
         settings["password"] = clean_text(settings.get("password", ""), "password", 128, allow_empty=True)
+        settings["spectatorPassword"] = clean_text(
+            settings.get("spectatorPassword", ""), "spectatorPassword", 128, allow_empty=True
+        )
         settings["maxCarSlots"] = bounded_int(settings.get("maxCarSlots"), "maxCarSlots", 1, 100)
         settings["isRaceLocked"] = bounded_int(settings.get("isRaceLocked"), "isRaceLocked", 0, 1)
         if settings.get("carGroup") not in {"FreeForAll", "GT3", "GT4", "Cup", "ST"}:
@@ -752,7 +760,16 @@ def kill_acc_server():
 
         print(f"[*] Terminando accServer.exe gestionado (PID {pid}) y liberando sockets...")
         subprocess.run(["taskkill", "/F", "/PID", str(pid), "/T"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        time.sleep(2.5)
+        deadline = time.monotonic() + KILL_WAIT_SECONDS
+        while is_pid_acc_running(pid):
+            if time.monotonic() >= deadline:
+                message = f"accServer (PID {pid}) sigue en ejecución tras taskkill; se mantiene como gestionado."
+                print(f"[!] {message}")
+                with state_lock:
+                    app_state["status_message"] = message
+                return False
+            time.sleep(0.5)
+        time.sleep(PORT_RELEASE_SECONDS)  # Windows tarda en liberar los puertos TCP/UDP
         clear_managed_pid_file()
         LIVE_LOG.reset()
         with state_lock:
@@ -959,7 +976,20 @@ def refresh_rotation_state():
     return list(new_rotation)
 
 
-def load_or_create_panel_token():
+def apply_rotation_change(mutate):
+    """Modifica rotation_config.json bajo config_lock; mutate(cfg) devuelve un mensaje de error o None."""
+    with config_lock:
+        cfg = get_rotation_config()
+        error = mutate(cfg)
+        if error:
+            return None, None, error
+        if not compute_active_track_rotation(cfg, fallback=False):
+            return None, None, "La rotación debe conservar al menos una pista."
+        save_rotation_config(cfg)
+        return cfg, refresh_rotation_state(), None
+
+
+def load_or_create_panel_token(force_new=False):
     environment_token = os.environ.get("ACC_PANEL_TOKEN", "").strip()
     if environment_token:
         if len(environment_token) < 24:
@@ -968,7 +998,7 @@ def load_or_create_panel_token():
 
     stored = read_json_safe(AUTH_FILE, {})
     token = stored.get("token") if isinstance(stored, dict) else None
-    if isinstance(token, str) and len(token) >= 24:
+    if not force_new and isinstance(token, str) and len(token) >= 24:
         return token
 
     token = secrets.token_urlsafe(32)
@@ -976,9 +1006,27 @@ def load_or_create_panel_token():
     return token
 
 
+def mask_token(token):
+    """Muestra sólo el inicio y el final del token para identificarlo en consola sin exponerlo."""
+    if not token or len(token) < 12:
+        return "****"
+    return f"{token[:4]}…{token[-4:]}"
+
+
 def is_authorized(handler):
     supplied = handler.headers.get("X-Admin-Token", "")
-    return bool(PANEL_TOKEN and supplied and hmac.compare_digest(supplied, PANEL_TOKEN))
+    if not PANEL_TOKEN or not supplied:
+        return False
+    # Comparar bytes: compare_digest lanza TypeError con str no ASCII (cabeceras se decodifican en latin-1).
+    return hmac.compare_digest(supplied.encode("utf-8", "surrogateescape"), PANEL_TOKEN.encode("utf-8"))
+
+
+def lan_addresses():
+    try:
+        _, _, addresses = socket.gethostbyname_ex(socket.gethostname())
+    except OSError:
+        return []
+    return [address for address in addresses if not address.startswith("127.")]
 
 
 def safe_web_file_path(url_path):
@@ -998,6 +1046,9 @@ def safe_web_file_path(url_path):
 
 # --- 6. Manejador de Solicitudes HTTP (REST API + Web GUI) ---
 class AdminPanelHandler(BaseHTTPRequestHandler):
+    # Evita que una conexión lenta (modo --lan) retenga un hilo indefinidamente.
+    timeout = REQUEST_TIMEOUT_SECONDS
+
     def send_json(self, data, status_code=200):
         body = json.dumps(data, ensure_ascii=False).encode("utf-8")
         self.send_response(status_code)
@@ -1012,6 +1063,25 @@ class AdminPanelHandler(BaseHTTPRequestHandler):
         self.send_error(405, "Método no permitido")
 
     def do_GET(self):
+        self.run_safely(self.handle_get)
+
+    def do_POST(self):
+        self.run_safely(self.handle_post)
+
+    def run_safely(self, handler):
+        try:
+            handler()
+        except (ConnectionError, TimeoutError):
+            pass  # El navegador cerró la conexión: nada que responder.
+        except Exception:
+            print(f"[!] Error interno atendiendo {self.command} {urlparse(self.path).path}:")
+            traceback.print_exc()
+            try:
+                self.send_json({"success": False, "message": "Error interno del panel. Revisa la consola."}, 500)
+            except OSError:
+                pass
+
+    def handle_get(self):
         parsed = urlparse(self.path)
         path = parsed.path
 
@@ -1038,7 +1108,7 @@ class AdminPanelHandler(BaseHTTPRequestHandler):
         else:
             self.handle_static_files(path)
 
-    def do_POST(self):
+    def handle_post(self):
         parsed = urlparse(self.path)
         path = parsed.path
         if not path.startswith("/api/") or not is_authorized(self):
@@ -1095,8 +1165,13 @@ class AdminPanelHandler(BaseHTTPRequestHandler):
                 self.send_json({"success": False, "message": str(error)}, 409)
 
         elif path == "/api/rotation/toggle":
+            enabled = post_data.get("enabled")
+            if enabled is not None and not isinstance(enabled, bool):
+                self.send_json({"success": False, "message": "enabled debe ser booleano."}, 400)
+                return
             with state_lock:
-                app_state["auto_rotation"] = not app_state["auto_rotation"]
+                # Con "enabled" el estado es explícito (idempotente); sin él se mantiene el alternado clásico.
+                app_state["auto_rotation"] = (not app_state["auto_rotation"]) if enabled is None else enabled
                 val = app_state["auto_rotation"]
                 app_state["rotation_epoch"] += 1
             self.send_json({"success": True, "auto_rotation": val, "message": f"Auto-rotación: {'Habilitada' if val else 'Pausada'}"})
@@ -1137,23 +1212,21 @@ class AdminPanelHandler(BaseHTTPRequestHandler):
             if not dlc_id or dlc_id not in DLC_CATEGORIES or not isinstance(enabled, bool):
                 self.send_json({"success": False, "message": "DLC no válido"}, 400)
                 return
-            
-            cfg = get_rotation_config()
-            active = set(cfg.get("active_dlcs", list(DLC_CATEGORIES.keys())))
-            if enabled:
-                active.add(dlc_id)
-            else:
-                active.discard(dlc_id)
-            if not active:
-                active.add("base")
-            
-            cfg["active_dlcs"] = [item for item in DLC_CATEGORIES if item in active]
-            if not compute_active_track_rotation(cfg, fallback=False):
-                self.send_json({"success": False, "message": "La rotación debe conservar al menos una pista."}, 400)
+
+            def toggle_dlc(cfg):
+                active = set(cfg.get("active_dlcs", list(DLC_CATEGORIES.keys())))
+                if enabled:
+                    active.add(dlc_id)
+                else:
+                    active.discard(dlc_id)
+                if not active:
+                    active.add("base")
+                cfg["active_dlcs"] = [item for item in DLC_CATEGORIES if item in active]
+
+            cfg, rotation_pool, error = apply_rotation_change(toggle_dlc)
+            if error:
+                self.send_json({"success": False, "message": error}, 400)
                 return
-            save_rotation_config(cfg)
-            rotation_pool = refresh_rotation_state()
-            
             self.send_json({
                 "success": True,
                 "message": f"DLC {DLC_CATEGORIES[dlc_id]['name']} {'activado' if enabled else 'desactivado'}",
@@ -1167,21 +1240,19 @@ class AdminPanelHandler(BaseHTTPRequestHandler):
             if not is_valid_track_file(track_file) or not isinstance(enabled, bool):
                 self.send_json({"success": False, "message": "track_file no es una plantilla permitida."}, 400)
                 return
-            
-            cfg = get_rotation_config()
-            disabled = set(cfg.get("disabled_tracks", []))
-            if enabled:
-                disabled.discard(track_file)
-            else:
-                disabled.add(track_file)
-            
-            cfg["disabled_tracks"] = list(disabled)
-            if not compute_active_track_rotation(cfg, fallback=False):
-                self.send_json({"success": False, "message": "La rotación debe conservar al menos una pista."}, 400)
+
+            def toggle_track(cfg):
+                disabled = set(cfg.get("disabled_tracks", []))
+                if enabled:
+                    disabled.discard(track_file)
+                else:
+                    disabled.add(track_file)
+                cfg["disabled_tracks"] = sorted(disabled)
+
+            cfg, rotation_pool, error = apply_rotation_change(toggle_track)
+            if error:
+                self.send_json({"success": False, "message": error}, 400)
                 return
-            save_rotation_config(cfg)
-            rotation_pool = refresh_rotation_state()
-            
             self.send_json({
                 "success": True,
                 "message": f"Pista {track_file} {'activada' if enabled else 'desactivada'} en rotación",
@@ -1191,22 +1262,23 @@ class AdminPanelHandler(BaseHTTPRequestHandler):
 
         elif path == "/api/rotation/preset":
             preset = post_data.get("preset", "all")
-            cfg = get_rotation_config()
-            if preset == "all":
-                cfg["active_dlcs"] = list(DLC_CATEGORIES.keys())
-                cfg["disabled_tracks"] = []
-            elif preset == "base_only":
-                cfg["active_dlcs"] = ["base"]
-                cfg["disabled_tracks"] = []
-            elif preset == "dlc_only":
-                cfg["active_dlcs"] = [k for k in DLC_CATEGORIES.keys() if k != "base"]
-                cfg["disabled_tracks"] = []
-            else:
+            presets = {
+                "all": list(DLC_CATEGORIES.keys()),
+                "base_only": ["base"],
+                "dlc_only": [k for k in DLC_CATEGORIES.keys() if k != "base"],
+            }
+            if preset not in presets:
                 self.send_json({"success": False, "message": "Preset no válido."}, 400)
                 return
-            save_rotation_config(cfg)
-            rotation_pool = refresh_rotation_state()
-            
+
+            def apply_preset(cfg):
+                cfg["active_dlcs"] = presets[preset]
+                cfg["disabled_tracks"] = []
+
+            cfg, rotation_pool, error = apply_rotation_change(apply_preset)
+            if error:
+                self.send_json({"success": False, "message": error}, 400)
+                return
             self.send_json({
                 "success": True,
                 "message": f"Preset '{preset}' aplicado exitosamente",
@@ -1279,6 +1351,40 @@ class AdminPanelHandler(BaseHTTPRequestHandler):
             except ValidationError as error:
                 self.send_json({"success": False, "message": str(error)}, 400)
 
+        elif path == "/api/entrylist/remove":
+            try:
+                player_id = validate_player_id(post_data.get("playerId", ""))
+                with config_lock:
+                    entrylist = get_entrylist()
+                    entries = entrylist.get("entries", [])
+                    kept = [
+                        entry for entry in entries
+                        if not any(d.get("playerID") == player_id for d in entry.get("drivers", []) if isinstance(d, dict))
+                    ]
+                    if len(kept) == len(entries):
+                        self.send_json({"success": False, "message": "Ese Steam ID no está en la entry list."}, 404)
+                        return
+                    entrylist["entries"] = kept
+                    save_entrylist(validate_entrylist(entrylist))
+                self.send_json({"success": True, "message": "Entrada removida de entrylist."})
+            except ValidationError as error:
+                self.send_json({"success": False, "message": str(error)}, 400)
+
+        elif path == "/api/entrylist/force":
+            enabled = post_data.get("enabled")
+            if not isinstance(enabled, bool):
+                self.send_json({"success": False, "message": "enabled debe ser booleano."}, 400)
+                return
+            try:
+                with config_lock:
+                    entrylist = get_entrylist()
+                    entrylist["forceEntryList"] = 1 if enabled else 0
+                    save_entrylist(validate_entrylist(entrylist))
+                self.send_json({"success": True, "force_entry_list": enabled,
+                                "message": f"Whitelist estricta (forceEntryList): {'ACTIVADA' if enabled else 'DESACTIVADA'}"})
+            except ValidationError as error:
+                self.send_json({"success": False, "message": str(error)}, 400)
+
         elif path == "/api/entrylist":
             try:
                 with config_lock:
@@ -1294,10 +1400,15 @@ class AdminPanelHandler(BaseHTTPRequestHandler):
 
     # --- Métodos de Control de API ---
     def handle_api_status(self):
-        running = is_acc_running()
-        pid = load_managed_pid() if running else None
+        pid = load_managed_pid()
+        running = pid is not None
+        unmanaged = not running and is_any_acc_running()
         event_cfg = read_json_safe(os.path.join(CFG_DIR, "event.json"), {})
         settings_cfg = read_json_safe(os.path.join(CFG_DIR, "settings.json"), {})
+        configuration_cfg = read_json_safe(os.path.join(CFG_DIR, "configuration.json"), {})
+        event_cfg = event_cfg if isinstance(event_cfg, dict) else {}
+        settings_cfg = settings_cfg if isinstance(settings_cfg, dict) else {}
+        configuration_cfg = configuration_cfg if isinstance(configuration_cfg, dict) else {}
 
         uptime = 0
         with state_lock:
@@ -1310,7 +1421,7 @@ class AdminPanelHandler(BaseHTTPRequestHandler):
 
         self.send_json({
             "is_running": running,
-            "unmanaged_acc_detected": is_any_acc_running() and not running,
+            "unmanaged_acc_detected": unmanaged,
             "pid": pid,
             "uptime_seconds": uptime,
             "auto_rotation": auto_rot,
@@ -1321,6 +1432,15 @@ class AdminPanelHandler(BaseHTTPRequestHandler):
             "track_name": event_cfg.get("track", "Desconocido"),
             "server_name": settings_cfg.get("serverName", "ACC Dedicated Server"),
             "max_car_slots": settings_cfg.get("maxCarSlots", 24),
+            "is_race_locked": settings_cfg.get("isRaceLocked"),
+            "udp_port": configuration_cfg.get("udpPort"),
+            "tcp_port": configuration_cfg.get("tcpPort"),
+            "max_connections": configuration_cfg.get("maxConnections"),
+            "weather": {
+                "ambient_temp": event_cfg.get("ambientTemp"),
+                "cloud_level": event_cfg.get("cloudLevel"),
+                "rain": event_cfg.get("rain"),
+            },
             "sessions": event_cfg.get("sessions", [])
         })
 
@@ -1405,8 +1525,11 @@ class AdminPanelHandler(BaseHTTPRequestHandler):
         configuration = read_json_safe(os.path.join(CFG_DIR, "configuration.json"), {})
         event = read_json_safe(os.path.join(CFG_DIR, "event.json"), {})
         assist = read_json_safe(os.path.join(CFG_DIR, "assistRules.json"), {})
+        settings = settings if isinstance(settings, dict) else {}
+        # Las contraseñas nunca salen del servidor; sólo se indica si están definidas.
         self.send_json({
-            "settings": settings,
+            "settings": {key: value for key, value in settings.items() if key not in SECRET_SETTINGS_KEYS},
+            "secrets_set": {key: bool(settings.get(key)) for key in SECRET_SETTINGS_KEYS},
             "configuration": configuration,
             "event": event,
             "assistRules": assist
@@ -1582,7 +1705,7 @@ class AdminPanelHandler(BaseHTTPRequestHandler):
         return
 
 # --- 7. Inicialización y Arranque del Servidor ---
-def run_server(port=8080, host="127.0.0.1", open_browser=True):
+def run_server(port=8080, host="127.0.0.1", open_browser=True, new_token=False):
     global PANEL_TOKEN
     if not isinstance(port, int) or not 1 <= port <= 65535:
         raise ValueError("El puerto debe estar entre 1 y 65535.")
@@ -1596,7 +1719,7 @@ def run_server(port=8080, host="127.0.0.1", open_browser=True):
     os.makedirs(LOG_DIR, exist_ok=True)
     os.makedirs(WEB_DIR, exist_ok=True)
     os.makedirs(ADMIN_PANEL_DIR, exist_ok=True)
-    PANEL_TOKEN = load_or_create_panel_token()
+    PANEL_TOKEN = load_or_create_panel_token(force_new=new_token)
     sync_state_from_event()
 
     # Iniciar hilo de auto-rotación en segundo plano
@@ -1607,12 +1730,18 @@ def run_server(port=8080, host="127.0.0.1", open_browser=True):
     httpd = ThreadingHTTPServer(server_address, AdminPanelHandler)
     httpd.daemon_threads = True
     access_url = f"http://127.0.0.1:{port}/?token={PANEL_TOKEN}"
+    token_source = "variable ACC_PANEL_TOKEN" if os.environ.get("ACC_PANEL_TOKEN", "").strip() else AUTH_FILE
     print("=" * 68)
     print(f"[+] ASSETTO CORSA COMPETIZIONE - ADMIN CONTROL PANEL v1.0")
     print(f"[*] Carpeta Servidor ACC : {SERVER_DIR}")
-    print(f"[*] Acceso web protegido : {access_url}")
+    print(f"[*] Acceso web local     : http://127.0.0.1:{port}/?token=<token>")
+    print(f"[*] Token                : {mask_token(PANEL_TOKEN)} (completo en {token_source})")
+    if open_browser:
+        print("[*] El navegador se abre con el token incluido; no hace falta copiarlo.")
     if host == "0.0.0.0":
-        print("[!] Modo LAN activo: el token viaja por HTTP. Usa una red de confianza.")
+        for address in lan_addresses():
+            print(f"[*] Acceso desde la LAN  : http://{address}:{port}/?token=<token>")
+        print("[!] Modo LAN activo: el token y la configuración viajan por HTTP sin cifrar. Usa sólo una red de confianza.")
     print(f"[*] Presiona Ctrl+C en esta consola para detener el panel.")
     print("=" * 68)
     if open_browser:
@@ -1628,6 +1757,7 @@ if __name__ == "__main__":
     port_arg = 8080
     host_arg = "127.0.0.1"
     open_browser_arg = True
+    new_token_arg = False
     skip_next = False
     
     args = sys.argv[1:]
@@ -1643,6 +1773,7 @@ if __name__ == "__main__":
             print("  --no-open            No abrir el navegador automáticamente al iniciar")
             print("  --no-uac             Omitir la comprobación/solicitud de elevación UAC")
             print("  --server-dir <ruta>  Especificar manualmente la ruta a la carpeta 'server'")
+            print("  --new-token          Generar un token de acceso nuevo (invalida el anterior)")
             print("  --help, -h           Mostrar esta ayuda")
             sys.exit(0)
         elif arg == "--no-uac":
@@ -1651,6 +1782,8 @@ if __name__ == "__main__":
             host_arg = "0.0.0.0"
         elif arg == "--no-open":
             open_browser_arg = False
+        elif arg == "--new-token":
+            new_token_arg = True
         elif arg == "--server-dir":
             skip_next = True
             continue
@@ -1658,5 +1791,5 @@ if __name__ == "__main__":
             port_arg = int(arg)
         else:
             raise SystemExit(f"Argumento no reconocido: {arg}")
-    run_server(port_arg, host_arg, open_browser_arg)
+    run_server(port_arg, host_arg, open_browser_arg, new_token_arg)
 

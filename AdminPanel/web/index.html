@@ -5,9 +5,6 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta name="referrer" content="no-referrer">
   <title>ACC Dedicated Server — Admin Control Panel</title>
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Rajdhani:wght@500;600;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="css/style.css">
 </head>
 <body>
@@ -39,9 +36,9 @@
 
       <!-- Network Ports Tag -->
       <div class="network-badge">
-        <span class="net-item"><strong class="net-label">UDP</strong> 9231</span>
+        <span class="net-item"><strong class="net-label">UDP</strong> <span id="net-udp-port">—</span></span>
         <span class="net-divider">/</span>
-        <span class="net-item"><strong class="net-label">TCP</strong> 9232</span>
+        <span class="net-item"><strong class="net-label">TCP</strong> <span id="net-tcp-port">—</span></span>
       </div>
 
       <!-- Live Clock / Uptime -->
@@ -129,11 +126,11 @@
           <span class="kpi-title">Circuito en Carrera</span>
         </div>
         <div class="kpi-value-block">
-          <span class="kpi-main-val uppercase" id="kpi-track-name">MONZA</span>
+          <span class="kpi-main-val uppercase" id="kpi-track-name">—</span>
           <span class="kpi-sub-val" id="kpi-track-file">cfg/event.json</span>
         </div>
         <div class="kpi-footer" id="kpi-track-weather">
-          Temp: 25°C | Nubes: 10% | Lluvia: 0%
+          Clima: —
         </div>
       </div>
 
@@ -146,12 +143,10 @@
           <span class="kpi-title">Formato del Fin de Semana</span>
         </div>
         <div class="kpi-value-block sessions-pill-container" id="kpi-sessions-container">
-          <span class="session-pill fp">FP: 10m</span>
-          <span class="session-pill q">Q: 15m</span>
-          <span class="session-pill r">R: 20m</span>
+          <span class="session-pill fp">—</span>
         </div>
         <div class="kpi-footer">
-          Cierre en carrera: <strong id="kpi-race-locked">Bloqueado</strong>
+          Cierre en carrera: <strong id="kpi-race-locked">—</strong>
         </div>
       </div>
 
@@ -165,10 +160,10 @@
         </div>
         <div class="kpi-value-block">
           <span class="kpi-main-val" id="kpi-max-slots">24 SLOTS</span>
-          <span class="kpi-sub-val">Max Conx: 85</span>
+          <span class="kpi-sub-val" id="kpi-max-connections">Max Conx: —</span>
         </div>
         <div class="kpi-footer" id="kpi-server-room-name">
-          [CL] Server Oscuro | LUKAS GAY
+          —
         </div>
       </div>
     </section>
@@ -418,7 +413,7 @@
           <div class="alert-icon">🛡️</div>
           <div class="alert-content">
             <strong>Protección de Codificación UTF-16 LE Activa</strong>
-            <p>Al guardar, el orquestador escribe <code>settings.json</code> y <code>configuration.json</code> con el BOM binario exacto requerido por el motor en C++ de ACC para evitar crashes.</p>
+            <p>Al guardar, el orquestador escribe <code>settings.json</code>, <code>configuration.json</code>, <code>assistRules.json</code> y <code>event.json</code> en UTF-16 LE con BOM, como exige ACC. Las contraseñas nunca se envían al navegador.</p>
           </div>
         </div>
 
@@ -434,12 +429,16 @@
 
             <div class="form-group">
               <label for="cfg-admin-password">Contraseña de Administrador</label>
-              <input type="password" id="cfg-admin-password" class="form-input" autocomplete="current-password" required>
+              <input type="password" id="cfg-admin-password" class="form-input" autocomplete="new-password" placeholder="Sin cambios">
+              <span class="field-hint" id="cfg-admin-password-hint">Déjala vacía para conservar la actual.</span>
             </div>
 
             <div class="form-group">
               <label for="cfg-server-password">Contraseña de Acceso (Opcional)</label>
-              <input type="password" id="cfg-server-password" class="form-input" autocomplete="new-password" placeholder="Vacío para acceso público">
+              <input type="password" id="cfg-server-password" class="form-input" autocomplete="new-password" placeholder="Sin cambios">
+              <label class="checkbox-label field-hint">
+                <input type="checkbox" id="cfg-clear-server-password"> Quitar contraseña (sala pública)
+              </label>
             </div>
 
             <div class="form-row">
@@ -631,10 +630,10 @@
     <div class="modal-dialog glass-panel" role="dialog" aria-modal="true" aria-labelledby="mod-modal-driver-name">
       <div class="modal-header">
         <div class="modal-title-group">
-          <span class="modal-badge-car" id="mod-modal-car-badge">#97</span>
+          <span class="modal-badge-car" id="mod-modal-car-badge">#—</span>
           <div>
-            <h3 class="modal-driver-name" id="mod-modal-driver-name">Patricio Schumacher</h3>
-            <span class="modal-car-model" id="mod-modal-car-model">Porsche 992 GT3 R</span>
+            <h3 class="modal-driver-name" id="mod-modal-driver-name">Piloto</h3>
+            <span class="modal-car-model" id="mod-modal-car-model">—</span>
           </div>
         </div>
         <button type="button" class="modal-close-btn" id="btn-close-mod-modal" aria-label="Cerrar ventana de moderación">&times;</button>
@@ -643,7 +642,7 @@
       <div class="modal-body">
         <!-- Player details summary -->
         <div class="modal-player-meta">
-          <span><strong>SteamID:</strong> <code id="mod-modal-steamid">S76561198399980163</code></span>
+          <span><strong>SteamID:</strong> <code id="mod-modal-steamid">—</code></span>
           <a href="#" id="mod-modal-steam-link" target="_blank" rel="noopener noreferrer" class="steam-link">Ver Perfil de Steam ↗</a>
         </div>
 

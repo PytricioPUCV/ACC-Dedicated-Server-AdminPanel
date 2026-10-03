@@ -26,8 +26,9 @@
   --text-muted: #546075;
 
   /* Typography */
-  --font-display: 'Rajdhani', -apple-system, BlinkMacSystemFont, sans-serif;
-  --font-body: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+  /* Sin fuentes externas: Rajdhani/Inter sólo si están instaladas; Bahnschrift/Segoe UI vienen con Windows. */
+  --font-display: 'Rajdhani', 'Bahnschrift', 'Segoe UI', system-ui, -apple-system, sans-serif;
+  --font-body: 'Inter', 'Segoe UI', system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
 
   /* Radii & Shadows */
   --radius-sm: 6px;
@@ -1882,4 +1883,12 @@ input:checked + .slider:before {
     scroll-behavior: auto !important;
     transition-duration: 0.01ms !important;
   }
+}
+
+/* Pistas bajo campos de formulario */
+.field-hint {
+  display: block;
+  margin-top: 0.35rem;
+  font-size: 0.75rem;
+  color: var(--text-muted);
 }

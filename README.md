@@ -84,8 +84,13 @@ Options:
   --no-open          Do not open the browser automatically on startup
   --no-uac           Skip the UAC elevation check/prompt
   --server-dir <dir> Manually specify the path to the 'server' folder
+  --new-token        Generate a new access token (invalidates the previous one)
   --help, -h         Show help
 ```
+
+The console only shows a masked token (e.g. `AbCd…WxYz`); the full token is stored in
+`AdminPanel/panel_auth.json` (or comes from the `ACC_PANEL_TOKEN` environment variable).
+Run the tests with `py -m unittest discover -s AdminPanel/tests`.
 
 ---
 

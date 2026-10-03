@@ -152,10 +152,20 @@ document.addEventListener("DOMContentLoaded", () => {
     document.getElementById("kpi-server-pid").textContent = data.pid ? `PID: ${data.pid}` : "PID: —";
     document.getElementById("kpi-status-message").textContent = data.status_message || "En espera";
 
-    document.getElementById("kpi-track-name").textContent = data.track_name || "MONZA";
+    document.getElementById("kpi-track-name").textContent = data.track_name || "—";
     document.getElementById("kpi-track-file").textContent = data.current_track_file || "cfg/event.json";
     document.getElementById("kpi-server-room-name").textContent = data.server_name || "ACC Dedicated Server";
-    document.getElementById("kpi-max-slots").textContent = `${data.max_car_slots || 24} SLOTS`;
+    document.getElementById("kpi-max-slots").textContent = `${data.max_car_slots ?? "—"} SLOTS`;
+    document.getElementById("kpi-max-connections").textContent = `Max Conx: ${data.max_connections ?? "—"}`;
+    document.getElementById("net-udp-port").textContent = data.udp_port ?? "—";
+    document.getElementById("net-tcp-port").textContent = data.tcp_port ?? "—";
+    document.getElementById("kpi-race-locked").textContent =
+      data.is_race_locked === 1 ? "Bloqueado" : (data.is_race_locked === 0 ? "Abierto" : "—");
+
+    const weather = data.weather || {};
+    const percent = value => (typeof value === "number" ? `${Math.round(value * 100)}%` : "—");
+    document.getElementById("kpi-track-weather").textContent =
+      `Temp: ${weather.ambient_temp ?? "—"}°C | Nubes: ${percent(weather.cloud_level)} | Lluvia: ${percent(weather.rain)}`;
 
     // Render Sessions Pill
     const sessionsContainer = document.getElementById("kpi-sessions-container");
@@ -467,10 +477,14 @@ document.addEventListener("DOMContentLoaded", () => {
     const e = data.event || {};
     const a = data.assistRules || {};
 
-    // Parámetros de servidor
+    // Parámetros de servidor (las contraseñas no se reciben: vacío = conservar la actual)
+    const secretsSet = data.secrets_set || {};
     document.getElementById("cfg-server-name").value = s.serverName || "";
-    document.getElementById("cfg-admin-password").value = s.adminPassword || "";
-    document.getElementById("cfg-server-password").value = s.password || "";
+    document.getElementById("cfg-admin-password").value = "";
+    document.getElementById("cfg-admin-password").placeholder = secretsSet.adminPassword ? "•••••••• (sin cambios)" : "Obligatoria";
+    document.getElementById("cfg-server-password").value = "";
+    document.getElementById("cfg-server-password").placeholder = secretsSet.password ? "•••••••• (sin cambios)" : "Sala pública (sin contraseña)";
+    document.getElementById("cfg-clear-server-password").checked = false;
     document.getElementById("cfg-max-slots").value = s.maxCarSlots || 24;
     document.getElementById("cfg-is-race-locked").value = s.isRaceLocked !== undefined ? s.isRaceLocked : 1;
     document.getElementById("cfg-car-group").value = s.carGroup || "FreeForAll";
@@ -510,10 +524,15 @@ document.addEventListener("DOMContentLoaded", () => {
     const a = appState.configData.assistRules || {};
     const c = appState.configData.configuration || {};
 
-    // Actualizar settings
+    // Actualizar settings: las contraseñas sólo se envían si se escribieron (o si se pide quitar la de acceso)
     s.serverName = document.getElementById("cfg-server-name").value.trim();
-    s.adminPassword = document.getElementById("cfg-admin-password").value.trim();
-    s.password = document.getElementById("cfg-server-password").value.trim();
+    delete s.adminPassword;
+    delete s.password;
+    const newAdminPassword = document.getElementById("cfg-admin-password").value.trim();
+    const newServerPassword = document.getElementById("cfg-server-password").value.trim();
+    if (newAdminPassword) s.adminPassword = newAdminPassword;
+    if (document.getElementById("cfg-clear-server-password").checked) s.password = "";
+    else if (newServerPassword) s.password = newServerPassword;
     s.maxCarSlots = parseInt(document.getElementById("cfg-max-slots").value, 10);
     s.isRaceLocked = parseInt(document.getElementById("cfg-is-race-locked").value, 10);
     s.carGroup = document.getElementById("cfg-car-group").value;
@@ -553,6 +572,7 @@ document.addEventListener("DOMContentLoaded", () => {
     const res = await apiPost("/api/config", payload);
     if (res.success) {
       showToast("¡Configuración guardada exitosamente con codificación UTF-16 LE!", "success");
+      loadConfigData();
       syncServerStatus();
     } else {
       showToast(res.message || "Error al guardar configuración.", "error");
@@ -600,9 +620,9 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   });
 
-  document.getElementById("auto-rotation-toggle").addEventListener("change", async () => {
-    const res = await apiPost("/api/rotation/toggle");
-    showToast(res.message, "info");
+  document.getElementById("auto-rotation-toggle").addEventListener("change", async (ev) => {
+    const res = await apiPost("/api/rotation/toggle", { enabled: ev.target.checked });
+    showToast(res.message || "No se pudo cambiar la auto-rotación.", res.success ? "info" : "error");
     syncServerStatus();
   });
 
@@ -799,9 +819,10 @@ document.addEventListener("DOMContentLoaded", () => {
       if (entries.length === 0) {
         entrylistTbody.innerHTML = `<tr><td colspan="5" class="text-center" style="color: var(--text-muted);">No hay entradas configuradas en entrylist.json.</td></tr>`;
       } else {
-        entrylistTbody.innerHTML = entries.map((e, idx) => {
+        entrylistTbody.innerHTML = entries.map(e => {
           const d = (e.drivers && e.drivers.length > 0) ? e.drivers[0] : {};
           const dName = `${d.firstName || ''} ${d.lastName || ''}`.trim() || 'Piloto Registrado';
+          const entryPayload = encodePayload({ player_id: d.playerID || "", driver_name: dName });
           const isAdmin = e.isServerAdmin === 1;
           return `
             <tr>
@@ -810,7 +831,7 @@ document.addEventListener("DOMContentLoaded", () => {
               <td class="text-center"><span class="car-number-badge">#${escapeHtml(e.raceNumber || '—')}</span></td>
               <td class="text-center">${isAdmin ? '<span class="badge-admin">👑 ADMIN VIP</span>' : '<span class="badge-tag">AUTORIZADO</span>'}</td>
               <td class="text-center">
-                <button class="btn btn-sm btn-secondary" data-action="remove-entry" data-entry-index="${idx}">
+                <button class="btn btn-sm btn-secondary" data-action="remove-entry" data-payload="${entryPayload}">
                   Quitar
                 </button>
               </td>
@@ -966,12 +987,11 @@ document.addEventListener("DOMContentLoaded", () => {
     loadPlayersData();
   };
 
-  window.removeEntryDirect = async (entryIdx) => {
-    const el = await apiGet("/api/entrylist");
-    if (!el || !el.entries) return;
-    el.entries.splice(entryIdx, 1);
-    const res = await apiPost("/api/entrylist", el);
-    showToast("Entrada removida de entrylist.", res.success ? "success" : "error");
+  window.removeEntryDirect = async (entryPayload) => {
+    const entry = decodePayload(entryPayload);
+    if (!confirm(`¿Quitar a ${entry.driver_name} (${entry.player_id}) de la entry list?`)) return;
+    const res = await apiPost("/api/entrylist/remove", { playerId: entry.player_id });
+    showToast(res.message || "No se pudo quitar la entrada.", res.success ? "success" : "error");
     loadPlayersData();
   };
 
@@ -989,14 +1009,14 @@ document.addEventListener("DOMContentLoaded", () => {
   document.addEventListener("click", event => {
     const control = event.target.closest("[data-action]");
     if (!control) return;
-    const { action, payload, trackFile, makeAdmin, entryIndex } = control.dataset;
+    const { action, payload, trackFile, makeAdmin } = control.dataset;
     try {
       if (action === "select-track") window.selectTrackDirect(trackFile);
       if (action === "open-modal") window.openModModal(payload);
       if (action === "toggle-admin") window.toggleAdminDirect(payload, makeAdmin === "true");
       if (action === "ban-player") window.banDirect(payload);
       if (action === "unban-player") window.unbanDirect(payload);
-      if (action === "remove-entry") window.removeEntryDirect(Number(entryIndex));
+      if (action === "remove-entry") window.removeEntryDirect(payload);
     } catch {
       showToast("La acción contiene datos inválidos.", "error");
     }
@@ -1038,11 +1058,10 @@ document.addEventListener("DOMContentLoaded", () => {
   });
 
   document.getElementById("toggle-force-entrylist").addEventListener("change", async (ev) => {
-    const el = await apiGet("/api/entrylist");
-    if (!el) return;
-    el.forceEntryList = ev.target.checked ? 1 : 0;
-    const res = await apiPost("/api/entrylist", el);
-    showToast(`Modo Whitelist (forceEntryList): ${ev.target.checked ? 'ACTIVADO' : 'DESACTIVADO'}`, res.success ? "success" : "error");
+    const enabled = ev.target.checked;
+    const res = await apiPost("/api/entrylist/force", { enabled });
+    if (!res.success) ev.target.checked = !enabled;
+    showToast(res.message || "No se pudo cambiar la whitelist.", res.success ? "success" : "error");
   });
 
   document.getElementById("btn-refresh-players").addEventListener("click", () => {
